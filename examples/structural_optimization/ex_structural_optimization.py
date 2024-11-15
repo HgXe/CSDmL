@@ -6,6 +6,7 @@ import os
 import sys
 from VortexAD.core.vlm.vlm_solver import vlm_solver
 import aframe as af
+import csdml as ml
 
 # lsdo_airfoil must be cloned and installed from https://github.com/LSDOlab/lsdo_airfoil
 from lsdo_airfoil.core.three_d_airfoil_aero_model import ThreeDAirfoilMLModelMaker
@@ -14,7 +15,7 @@ from lsdo_airfoil.core.three_d_airfoil_aero_model import ThreeDAirfoilMLModelMak
 # Settings
 couple = False
 optimize = True
-inline = False
+inline = True
 shell = False
 
 # The shell solver requires FEniCSx and femo, which require manual installation.
@@ -37,6 +38,8 @@ load_factor = 3
 rec = csdl.Recorder(inline=True, debug=True)
 rec.start()
 
+generator = ml.Generator(recorder=rec)
+
 # Initialize CADDEE and import geometry
 caddee = cd.CADDEE()
 c172_geom = cd.import_geometry('c172.stp')
@@ -46,7 +49,8 @@ def define_base_config(caddee : cd.CADDEE):
     base_config = cd.Configuration(system=aircraft)
     caddee.base_configuration = base_config
 
-    airframe = aircraft.comps["airframe"] = cd.Component()
+    fuselage_geometry = aircraft.create_subgeometry(search_names=["Fuselag"])
+    fuselage = cd.aircraft.components.Fuselage(length=7.49198, geometry=fuselage_geometry)
 
     # Setup wing component
     wing_geometry = aircraft.create_subgeometry(
@@ -54,8 +58,27 @@ def define_base_config(caddee : cd.CADDEE):
         # The wing coming out of openVSP has some extra surfaces that we don't need
         ignore_names=['0, 8', '0, 9', '0, 14', '0, 15', '1, 16', '1, 17', '1, 22', '1, 23']
     )
-    wing = cd.aircraft.components.Wing(AR=1, S_ref=1, geometry=wing_geometry)
-    airframe.comps["wing"] = wing
+
+    aspect_ratio = csdl.Variable(name="wing_aspect_ratio", value=7.72)
+    wing_root_twist = csdl.Variable(name="wing_root_twist", value=np.deg2rad(0))
+    wing_tip_twist = csdl.Variable(name="wing_tip_twist", value=np.deg2rad(0))
+
+    # Set design variables for wing
+    aspect_ratio.set_as_design_variable(upper=1.5 * 7.72, lower=0.5 * 7.72, scaler=1/8)
+    wing_root_twist.set_as_design_variable(upper=np.deg2rad(5), lower=np.deg2rad(-5), scaler=4)
+    wing_tip_twist.set_as_design_variable(upper=np.deg2rad(10), lower=np.deg2rad(-10), scaler=2)
+
+    generator.add_input(aspect_ratio)
+    generator.add_input(wing_root_twist)
+    generator.add_input(wing_tip_twist)
+
+    wing = cd.aircraft.components.Wing( 
+        AR=aspect_ratio, S_ref=16.17, 
+        taper_ratio=0.73, root_twist_delta=wing_root_twist,
+        tip_twist_delta=wing_tip_twist, 
+        geometry=wing_geometry
+    )
+    aircraft.comps["wing"] = wing
     
     # Generate internal geometry
     wing.construct_ribs_and_spars(
@@ -77,6 +100,24 @@ def define_base_config(caddee : cd.CADDEE):
     wing_oml = wing.create_subgeometry(search_names=['MainWing'])
     wing.quantities.right_wing_oml = right_wing_oml
     wing.quantities.oml = wing_oml
+
+    aero_inds = [11, 12, 19, 20]
+    wing_aero_functions = {key: wing_oml.functions[key] for key in [11, 12, 19, 20]}
+
+    for ind in aero_inds:
+        fun = wing_oml.functions[ind]
+        print(ind)
+        fun.evaluate(np.array([0., 0.]), plot=True)
+        fun.evaluate(np.array([1., 0.]), plot=True)
+        fun.evaluate(np.array([0., 1.]), plot=True)
+
+
+    exit()
+
+
+    wing_oml_coefficients = wing_oml.stack_coefficients()
+    wing_oml_coefficients.add_name('wing_oml_coefficients')
+    generator.add_output(wing_oml_coefficients)
 
     # material
     E = csdl.Variable(value=69E9, name='E')
@@ -121,7 +162,8 @@ def define_base_config(caddee : cd.CADDEE):
 
     # Spaces for states
     # pressure
-    pressure_function_space = fs.IDWFunctionSpace(num_parametric_dimensions=2, order=4, grid_size=(240, 40), conserve=False)
+    # pressure_function_space = fs.IDWFunctionSpace(num_parametric_dimensions=2, order=4, grid_size=(240, 40), conserve=False)
+    pressure_function_space = fs.RBFFunctionSpace(num_parametric_dimensions=2, grid_size=(20, 20), radial_function='gaussian', epsilon=5)
     indexed_pressue_function_space = wing_oml.create_parallel_space(pressure_function_space)
     wing.quantities.pressure_space = indexed_pressue_function_space
 
@@ -131,6 +173,9 @@ def define_base_config(caddee : cd.CADDEE):
                                                     displacement_space)
     wing.quantities.oml_displacement_space = wing_oml.create_parallel_space(
                                                     displacement_space)
+
+    # Connect wing to fuselage at the quarter chord
+    base_config.connect_component_geometries(fuselage, wing, 0.75 * wing.LE_center + 0.25 * wing.TE_center)
 
     # meshing
     mesh_container = base_config.mesh_container
@@ -181,6 +226,8 @@ def define_base_config(caddee : cd.CADDEE):
         wing_shell_mesh_cd.discretizations['wing'] = wing_shell_mesh
         mesh_container['shell_mesh'] = wing_shell_mesh_cd
 
+    base_config.setup_geometry()
+
 def define_conditions(caddee: cd.CADDEE):
     conditions = caddee.conditions
     base_config = caddee.base_configuration
@@ -199,7 +246,7 @@ def define_conditions(caddee: cd.CADDEE):
 
 def define_analysis(caddee: cd.CADDEE):
     conditions = caddee.conditions
-    wing = caddee.base_configuration.system.comps["airframe"].comps["wing"]
+    wing = caddee.base_configuration.system.comps["wing"]
 
     # finalize meshes
     cruise:cd.aircraft.conditions.CruiseCondition = conditions["cruise"]
@@ -253,7 +300,7 @@ def define_analysis(caddee: cd.CADDEE):
 
 def run_vlm(mesh_containers, conditions):
     # implicit displacement input
-    wing = conditions[0].configuration.system.comps["airframe"].comps["wing"]
+    wing = conditions[0].configuration.system.comps["wing"]
     displacement_space:fs.FunctionSetSpace = wing.quantities.oml_displacement_space
     implicit_disp_coeffs = []
     implicit_disp_fns = []
@@ -315,7 +362,7 @@ def run_vlm(mesh_containers, conditions):
     return vlm_outputs, implicit_disp_coeffs
 
 def fit_pressure_fn(mesh_container, condition, spanwise_Cp):
-    wing = condition.configuration.system.comps["airframe"].comps["wing"]
+    wing:cd.Component = condition.configuration.system.comps["wing"]
     vlm_mesh = mesh_container["vlm_mesh"]
     wing_lattice = vlm_mesh.discretizations["wing_chord_surface"]
     rho = condition.quantities.atmos_states.density
@@ -332,10 +379,29 @@ def fit_pressure_fn(mesh_container, condition, spanwise_Cp):
         regularization_parameter=1e-4,
     )
 
+    # fitting_error = np.linalg.norm(((spanwise_p.reshape((-1, )) - pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes))/spanwise_p.reshape((-1,))).value)
+    # print(f"Pressure function fitting error: {fitting_error}")
+
+    oml:fs.FunctionSet = wing.quantities.oml
+    oml.plot_but_good(color=pressure_function, grid_n=100)
+    exit()
+
+    pressure_function_coefficients = pressure_function.stack_coefficients()
+    pressure_function_coefficients.add_name('pressure_function')
+    generator.add_output(pressure_function_coefficients)
+
+    pressure_eval = pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    pressure_eval.add_name('pressure_eval')
+    generator.add_output(pressure_eval)
+
+    geo_eval = wing.geometry.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    geo_eval.add_name('geo_eval')
+    generator.add_output(geo_eval)
+
     return pressure_function
 
 def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, pressure_function, rec=False):
-    wing = condition.configuration.system.comps["airframe"].comps["wing"]
+    wing = condition.configuration.system.comps["wing"]
     
     # Shell
     pav_shell_mesh = mesh_container["shell_mesh"]
@@ -397,7 +463,7 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
     return oml_displacement_function, shell_outputs
 
 def run_beam(mesh_container, condition, pressure_fn):
-    wing = condition.configuration.system.comps["airframe"].comps["wing"]
+    wing = condition.configuration.system.comps["wing"]
     beam_mesh = mesh_container["beam_mesh"]
     wing_box = beam_mesh.discretizations["wing"]
     aluminum = wing.quantities.material_properties.material
@@ -564,6 +630,9 @@ define_conditions(caddee)
 define_analysis(caddee)
 csdl.save_optimization_variables()
 
+# generator.generate(filename='struct_opt_aero_data', samples_per_dim=10)
+exit()
+
 fname = 'structural_opt_beam_test'
 if optimize:
     from modopt import CSDLAlphaProblem
@@ -595,7 +664,7 @@ if optimize:
 # load dv values and perform an inline execution to get the final results
 load_dv_values(fname+'_final.hdf5', 'inline')
 rec.execute()
-wing = caddee.base_configuration.system.comps["airframe"].comps["wing"]
+wing = caddee.base_configuration.system.comps["wing"]
 mesh = wing.quantities.oml.plot_but_good(color=wing.quantities.material_properties.thickness)
 wing.quantities.oml.plot_but_good(color=wing.quantities.oml_displacement)
 wing.quantities.oml.plot_but_good(color=wing.quantities.pressure_function)
