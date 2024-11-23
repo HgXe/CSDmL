@@ -8,6 +8,8 @@ from VortexAD.core.vlm.vlm_solver import vlm_solver
 import aframe as af
 import csdml as ml
 
+from functions import map_parametric_wing_pressure
+
 # lsdo_airfoil must be cloned and installed from https://github.com/LSDOlab/lsdo_airfoil
 from lsdo_airfoil.core.three_d_airfoil_aero_model import ThreeDAirfoilMLModelMaker
 
@@ -101,19 +103,46 @@ def define_base_config(caddee : cd.CADDEE):
     wing.quantities.right_wing_oml = right_wing_oml
     wing.quantities.oml = wing_oml
 
+
+
     aero_inds = [11, 12, 19, 20]
-    wing_aero_functions = {key: wing_oml.functions[key] for key in [11, 12, 19, 20]}
-
-    for ind in aero_inds:
-        fun = wing_oml.functions[ind]
-        print(ind)
-        fun.evaluate(np.array([0., 0.]), plot=True)
-        fun.evaluate(np.array([1., 0.]), plot=True)
-        fun.evaluate(np.array([0., 1.]), plot=True)
+    # wing_aero_functions = {key: wing_oml.functions[key] for key in [11, 12, 19, 20]}
 
 
-    exit()
+    mono_wing_fs = fs.BSplineSpace(2, (1, 3), (3, 319*2))
+    wing_aero_geo:fs.FunctionSet = c172_geom.declare_component(function_indices=aero_inds)
+    # wing_function_space = wing_aero_geo.functions[11].space
+    # print(wing_function_space.degree)
+    # print(wing_function_space.coefficients_shape)
+    # wing_aero_geo.plot()
+    # exit()
 
+    parametric_grid = wing_aero_geo.generate_parametric_grid((5, 1000))
+    grid = wing_aero_geo.evaluate(parametric_grid)
+    mono_wing_fss = wing_aero_geo.create_parallel_space(mono_wing_fs)
+    parametric_map = fs.ParametricMapping(map_parametric_wing_pressure, aero_inds)
+    mono_wing_fss.add_parametric_map(parametric_map, mono_wing_fs)
+    mapped_parametric_grid = mono_wing_fss._apply_parametric_maps(parametric_grid)
+    mono_wing_function = mono_wing_fss.fit_function_set(grid, mapped_parametric_grid)
+    
+    mono_grid = mono_wing_function.evaluate(parametric_grid)
+
+    fitting_error = np.linalg.norm((grid - mono_grid).value)/np.linalg.norm(grid.value)
+    print(f"Fitting error: {fitting_error}")
+    
+    
+    wing.quantities.mono_wing_function = mono_wing_function
+
+    # mono_wing_function.plot_but_good(grid_n=101)
+    # exit()
+
+    # for ind in aero_inds:
+    #     fun = wing_oml.functions[ind]
+    #     print(ind)
+    #     fun.evaluate(np.array([0., 0.]), plot=True)
+    #     fun.evaluate(np.array([1., 0.]), plot=True)
+    #     fun.evaluate(np.array([0., 1.]), plot=True)
+    # exit()
 
     wing_oml_coefficients = wing_oml.stack_coefficients()
     wing_oml_coefficients.add_name('wing_oml_coefficients')
@@ -163,8 +192,11 @@ def define_base_config(caddee : cd.CADDEE):
     # Spaces for states
     # pressure
     # pressure_function_space = fs.IDWFunctionSpace(num_parametric_dimensions=2, order=4, grid_size=(240, 40), conserve=False)
-    pressure_function_space = fs.RBFFunctionSpace(num_parametric_dimensions=2, grid_size=(20, 20), radial_function='gaussian', epsilon=5)
+    pressure_function_space = fs.RBFFunctionSpace(num_parametric_dimensions=2, grid_size=(40, 40), radial_function='gaussian', epsilon=10)
+    pressure_mapping = fs.ParametricMapping(map_parametric_wing_pressure, aero_inds)
+
     indexed_pressue_function_space = wing_oml.create_parallel_space(pressure_function_space)
+    indexed_pressue_function_space.add_parametric_map(pressure_mapping, pressure_function_space)
     wing.quantities.pressure_space = indexed_pressue_function_space
 
     # displacement
@@ -335,7 +367,6 @@ def run_vlm(mesh_containers, conditions):
         nodal_coordinates = csdl.vstack(nodal_coords)
         nodal_velocities = csdl.vstack(nodal_vels)
 
-
     # Add an airfoil model
     nasa_langley_airfoil_maker = ThreeDAirfoilMLModelMaker(
         airfoil_name="ls417",
@@ -382,9 +413,9 @@ def fit_pressure_fn(mesh_container, condition, spanwise_Cp):
     # fitting_error = np.linalg.norm(((spanwise_p.reshape((-1, )) - pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes))/spanwise_p.reshape((-1,))).value)
     # print(f"Pressure function fitting error: {fitting_error}")
 
-    oml:fs.FunctionSet = wing.quantities.oml
-    oml.plot_but_good(color=pressure_function, grid_n=100)
-    exit()
+    # oml:fs.FunctionSet = wing.quantities.mono_wing_function
+    # oml.plot_but_good(color=pressure_function, grid_n=101)
+    # exit()
 
     pressure_function_coefficients = pressure_function.stack_coefficients()
     pressure_function_coefficients.add_name('pressure_function')
@@ -630,7 +661,7 @@ define_conditions(caddee)
 define_analysis(caddee)
 csdl.save_optimization_variables()
 
-# generator.generate(filename='struct_opt_aero_data', samples_per_dim=10)
+generator.generate(filename='struct_opt_aero_data_01', samples_per_dim=4)
 exit()
 
 fname = 'structural_opt_beam_test'
@@ -641,8 +672,10 @@ if optimize:
     
     # If you have a GPU, you can set gpu=True - but it may not be faster
     # I think this is because the ml airfoil model can't be run on the GPU when Jax is using it
-    sim = csdl.experimental.JaxSimulator(rec, gpu=False, save_on_update=True, filename=fname)
-    
+    # sim = csdl.experimental.JaxSimulator(rec, gpu=False, save_on_update=True, filename=fname)
+    sim = csdl.experimental.PySimulator(rec)
+    sim.compute_totals()
+
     # If you don't have jax installed, you can use the PySimulator instead (it's slower)
     # To install jax, see https://jax.readthedocs.io/en/latest/installation.html
     # sim = csdl.experimental.PySimulator(rec)

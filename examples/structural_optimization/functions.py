@@ -1,9 +1,5 @@
 import numpy as np
 
-
-
-
-
 def map_parametric_wing_pressure(coords):
     # convert the input coordinates to the output coordinates
     # input coords are (index, u, v)
@@ -34,15 +30,17 @@ def map_parametric_wing_pressure(coords):
 
     for i, coord in enumerate(coords):
         ind, uv = coord
-        u, v = uv
+        if len(uv.shape) == 1:
+            uv = uv.reshape(1, -1)
+        u, v = uv[:, 0], uv[:, 1]
         if ind == 11:
-            out[i] = (u*0.5+0.5, 1-v*0.5)
+            out[i,:] = np.hstack((u*0.5+0.5, 1-v*0.5))
         elif ind == 12:
-            out[i] = (u*0.5+0.5, 0.5-v*0.5)
+            out[i,:] = np.hstack((u*0.5+0.5, 0.5-v*0.5))
         elif ind == 19:
-            out[i] = (0.5-u*0.5, 0.5+v*0.5)
+            out[i,:] = np.hstack((0.5-u*0.5, 0.5+v*0.5))
         elif ind == 20:
-            out[i] = (0.5-u*0.5, v*0.5)
+            out[i,:] = np.hstack((0.5-u*0.5, v*0.5))
 
     return out
 
