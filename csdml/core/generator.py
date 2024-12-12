@@ -90,7 +90,7 @@ class Generator():
 
         for n, sample in enumerate(samples):
             if n % print_interval == 0:
-                print(f'Generating samples {n}-{n+print_interval} of {n_samples}')
+                print(f'Generating samples {n}-{min(n+print_interval, n_samples)} of {n_samples}')
 
             ind = 0
             in_dict = {}

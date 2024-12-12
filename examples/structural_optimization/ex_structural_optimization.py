@@ -109,7 +109,7 @@ def define_base_config(caddee : cd.CADDEE):
     # wing_aero_functions = {key: wing_oml.functions[key] for key in [11, 12, 19, 20]}
 
 
-    mono_wing_fs = fs.BSplineSpace(2, (1, 3), (3, 319*2))
+    mono_wing_fs = fs.BSplineSpace(2, (1, 3), (3, int(319*2/16)))
     wing_aero_geo:fs.FunctionSet = c172_geom.declare_component(function_indices=aero_inds)
     # wing_function_space = wing_aero_geo.functions[11].space
     # print(wing_function_space.degree)
@@ -117,36 +117,7 @@ def define_base_config(caddee : cd.CADDEE):
     # wing_aero_geo.plot()
     # exit()
 
-    parametric_grid = wing_aero_geo.generate_parametric_grid((5, 1000))
-    grid = wing_aero_geo.evaluate(parametric_grid)
-    mono_wing_fss = wing_aero_geo.create_parallel_space(mono_wing_fs)
-    parametric_map = fs.ParametricMapping(map_parametric_wing_pressure, aero_inds)
-    mono_wing_fss.add_parametric_map(parametric_map, mono_wing_fs)
-    mapped_parametric_grid = mono_wing_fss._apply_parametric_maps(parametric_grid)
-    mono_wing_function = mono_wing_fss.fit_function_set(grid, mapped_parametric_grid)
-    
-    mono_grid = mono_wing_function.evaluate(parametric_grid)
 
-    fitting_error = np.linalg.norm((grid - mono_grid).value)/np.linalg.norm(grid.value)
-    print(f"Fitting error: {fitting_error}")
-    
-    
-    wing.quantities.mono_wing_function = mono_wing_function
-
-    # mono_wing_function.plot_but_good(grid_n=101)
-    # exit()
-
-    # for ind in aero_inds:
-    #     fun = wing_oml.functions[ind]
-    #     print(ind)
-    #     fun.evaluate(np.array([0., 0.]), plot=True)
-    #     fun.evaluate(np.array([1., 0.]), plot=True)
-    #     fun.evaluate(np.array([0., 1.]), plot=True)
-    # exit()
-
-    wing_oml_coefficients = wing_oml.stack_coefficients()
-    wing_oml_coefficients.add_name('wing_oml_coefficients')
-    generator.add_output(wing_oml_coefficients)
 
     # material
     E = csdl.Variable(value=69E9, name='E')
@@ -260,6 +231,47 @@ def define_base_config(caddee : cd.CADDEE):
 
     base_config.setup_geometry()
 
+    parametric_grid = wing_aero_geo.generate_parametric_grid((5, 1000))
+    grid = wing_aero_geo.evaluate(parametric_grid)
+    mono_wing_fss = wing_aero_geo.create_parallel_space(mono_wing_fs)
+    parametric_map = fs.ParametricMapping(map_parametric_wing_pressure, aero_inds)
+    mono_wing_fss.add_parametric_map(parametric_map, mono_wing_fs)
+    mapped_parametric_grid = mono_wing_fss._apply_parametric_maps(parametric_grid)
+    mono_wing_function = mono_wing_fss.fit_function_set(grid, mapped_parametric_grid)
+    
+    mono_grid = mono_wing_function.evaluate(parametric_grid)
+
+    fitting_error = np.linalg.norm((grid - mono_grid).value)/np.linalg.norm(grid.value)
+    print(f"Fitting error: {fitting_error}")
+    
+    
+    wing.quantities.mono_wing_function = mono_wing_function
+
+    # wing_plot = wing_oml.plot(show=False, opacity=1, color='red')
+    # mono_wing_function.plot(opacity=0.5, additional_plotting_elements=[wing_plot])
+
+    # mono_wing_function.plot_but_good(grid_n=101)
+    # exit()
+
+    # for ind in aero_inds:
+    #     fun = wing_oml.functions[ind]
+    #     print(ind)
+    #     fun.evaluate(np.array([0., 0.]), plot=True)
+    #     fun.evaluate(np.array([1., 0.]), plot=True)
+    #     fun.evaluate(np.array([0., 1.]), plot=True)
+    # exit()
+
+    wing_oml_coefficients = wing_oml.stack_coefficients()
+    wing_oml_coefficients.add_name('wing_oml_coefficients')
+    generator.add_output(wing_oml_coefficients)
+
+    mono_wing_oml_coefficients = mono_wing_function.stack_coefficients()
+    mono_wing_oml_coefficients.add_name('mono_wing_oml_coefficients')
+    generator.add_output(mono_wing_oml_coefficients)
+    # print(wing_oml_coefficients.shape)
+    # print(mono_wing_function.stack_coefficients().shape)
+    # exit()
+
 def define_conditions(caddee: cd.CADDEE):
     conditions = caddee.conditions
     base_config = caddee.base_configuration
@@ -303,6 +315,8 @@ def define_analysis(caddee: cd.CADDEE):
     # fit pressure function to trimmed VLM results
     # we can actually do this before the trim if we wanted, it would be updated automatically
     pressure_fn = fit_pressure_fn(mesh_container, cruise, Cp)
+
+    return
 
     # Run structural analysis
     if shell:
@@ -421,11 +435,25 @@ def fit_pressure_fn(mesh_container, condition, spanwise_Cp):
     pressure_function_coefficients.add_name('pressure_function')
     generator.add_output(pressure_function_coefficients)
 
-    pressure_eval = pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    # pressure_eval_pts = airfoil_upper_nodes + airfoil_lower_nodes
+    # for i in range(len(pressure_eval_pts)):
+    #     pressure_eval_pts[i] = [pressure_eval_pts[i][0], pressure_eval_pts[i][1][0, 0], pressure_eval_pts[i][1][0, 1]]
+    # pressure_eval_pts = np.array(pressure_eval_pts)
+    # np.savetxt('pressure_eval_pts.txt', pressure_eval_pts)
+    # exit()
+    para_grid = np.array(np.meshgrid(np.linspace(0, 1, 10), np.linspace(0, 1, 25))).reshape((2, -1)).T
+    # np.savetxt('pressure_eval_pts_2.txt', para_grid)
+    # exit()
+    para_grid = [(-1, para_grid[i].reshape(1,-1)) for i in range(para_grid.shape[0])]
+    # pressure_eval = pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    pressure_eval = pressure_function.evaluate(para_grid)
+    # wing.quantities.mono_wing_function.evaluate(para_grid, plot=True)
+    # exit()
     pressure_eval.add_name('pressure_eval')
     generator.add_output(pressure_eval)
 
-    geo_eval = wing.geometry.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    # geo_eval = wing.geometry.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
+    geo_eval = wing.quantities.mono_wing_function.evaluate(para_grid)
     geo_eval.add_name('geo_eval')
     generator.add_output(geo_eval)
 
@@ -661,7 +689,7 @@ define_conditions(caddee)
 define_analysis(caddee)
 csdl.save_optimization_variables()
 
-generator.generate(filename='struct_opt_aero_data_01', samples_per_dim=4)
+generator.generate(filename='struct_opt_aero_data_04', samples_per_dim=10)
 exit()
 
 fname = 'structural_opt_beam_test'
