@@ -96,6 +96,16 @@ model = dde.Model(data, net)
 model.compile("adam", lr=0.00001, metrics=["mean l2 relative error"])
 losshistory, train_state = model.train(iterations=100000)
 
+# 10x the number of parameters is the data is standard
+# Synergy with distributed optimization problem (branch and trunk)
+# Think about evaluated -> evaluated with "reverse trunk?" - constrained lsq similar to Seb's Aeroelastic work conservation paper
+
+
+
 # Plot the loss trajectory
 dde.utils.plot_loss_history(losshistory)
 plt.show()
+
+_K = csdl.Variable()
+
+_K = _K.set(csdl.slice[2*i:2*i+4, 2*i:2*i+4], _K[2*i:2*i+4, 2*i:2*i+4] + (_Ki_wo_x3 * x[i] ** 3))
