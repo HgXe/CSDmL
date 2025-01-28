@@ -57,24 +57,3 @@ def gelu(x:VariableLike, approximate:bool=True)->csdl.Variable:
         return ReLu(x).finalize_and_return_outputs()
     
 
-
-def correction_function(
-        x:csdl.Variable, #inputs as a vector
-        i:int,
-    ):
-    # activation_function = lambda x: csdl.maximum(np.zeros((num_neurons,)),x)
-    # activation_function = lambda x: csdl.maximum(0.1*x,x)
-    activation_function = lambda x: csdl.tanh(x)
-
-    for ii in range(4):
-        n = x.size
-        weights = csdl.Variable(name=f'w_{i}_{ii}',shape=(num_neurons,n), value=-10*(np.random.rand(num_neurons,n)-0.5))
-        bias = csdl.Variable(name=f'b_{i}_{ii}',shape=(num_neurons,), value=-10*(np.random.rand(num_neurons,)-0.5))
-        new_x = activation_function(weights@x+bias)
-        x = new_x
-
-    weights_out = csdl.Variable(name=f'wo_{i}',shape=(1,num_neurons,), value=-10.00*(np.random.rand(1,num_neurons)-0.5))
-    b_out = csdl.Variable(name=f'bo_{i}',shape=(1,), value=-0*(np.random.rand(1,)-0.5))
-
-    return weights_out@new_x+b_out
-

@@ -729,3 +729,6 @@ wing = caddee.base_configuration.system.comps["wing"]
 mesh = wing.quantities.oml.plot_but_good(color=wing.quantities.material_properties.thickness)
 wing.quantities.oml.plot_but_good(color=wing.quantities.oml_displacement)
 wing.quantities.oml.plot_but_good(color=wing.quantities.pressure_function)
+
+
+csdl.visualize_graph()
