@@ -33,7 +33,7 @@ class DeepOnet(NeuralNetwork):
         return csdl.einsum(z, y, action='ij,ij->i').reshape(-1, 1)
 
 
-    def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True):
+    def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
         X, t, Y = loss_data
         X_t = np.concatenate([X, t], axis=-1)
         repackaged_loss_data = (X_t, Y)
@@ -45,7 +45,7 @@ class DeepOnet(NeuralNetwork):
         else:
             repackaged_test_data = None
 
-        super().train_jax_opt(optimizer, repackaged_loss_data, num_batches, num_epochs, repackaged_test_data, plot)
+        super().train_jax_opt(optimizer, repackaged_loss_data, num_batches, num_epochs, repackaged_test_data, plot, device)
 
     # def train(self, X, T, y):
     #     rec_outer = csdl.get_current_recorder()
@@ -87,6 +87,7 @@ class DeepOnet(NeuralNetwork):
 
 if __name__ == '__main__':
     from jax.example_libraries import optimizers as jax_opt
+    import jax
 
     # test the DeepOnet class
     rec = csdl.Recorder(inline=True)
@@ -115,6 +116,7 @@ if __name__ == '__main__':
     epochs = 20000
     dim_x = 1
     lr = 0.001
+    device = jax.devices('gpu')[0]
 
     branch = FCNN(m, [100], 100, activation='gelu')
     trunk = FCNN(dim_x, [100], 100, activation='gelu')
@@ -122,5 +124,6 @@ if __name__ == '__main__':
     model = DeepOnet(trunk, branch)
     loss_data = X, T, y
 
+
     optimizer = jax_opt.adam(1e-3)
-    model.train_jax_opt(optimizer, loss_data, test_data=(X_test, T_test, Y_test), num_epochs=epochs)
+    model.train_jax_opt(optimizer, loss_data, test_data=(X_test, T_test, Y_test), num_epochs=epochs, device=device)

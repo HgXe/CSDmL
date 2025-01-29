@@ -76,7 +76,7 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True):
+    def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
         # turn off the outer recorder
         rec_outer = csdl.get_current_recorder()
         rec_outer.stop()
@@ -124,7 +124,7 @@ class NeuralNetwork():
                 test_loss = csdl.norm((Y_test - y_pred))
             elif callable(self.loss_function):
                 test_loss = self.loss_function(Y_test, y_pred)
-            jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs))
+            jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
 
         loss_history = []
         test_loss_history = []
