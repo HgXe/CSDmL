@@ -2,13 +2,6 @@ import csdl_alpha as csdl
 import numpy as np
 from csdml.core.activation_functions import gelu
 from csdml.core.neural_networks.neural_net import NeuralNetwork
-from jax.example_libraries import optimizers as jax_opt
-from csdl_alpha.backends.jax.graph_to_jax import create_jax_interface, create_jax_function
-from jax import jit as jjit
-import jax.numpy as jnp
-from time import time
-import jax
-
 
 
 class FCNN(NeuralNetwork):
@@ -69,6 +62,8 @@ class FCNN(NeuralNetwork):
         return x
 
 if __name__ == '__main__':
+    from jax.example_libraries import optimizers as jax_opt
+
     # test the FCNN class
     rec = csdl.Recorder(inline=True)
     rec.start()
