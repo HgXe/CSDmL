@@ -8,12 +8,12 @@
 [![PyPI Monthly Downloads][12]][11]
 -->
 
-[![GitHub Actions Test Badge](https://github.com/LSDOlab/lsdo_project_template/actions/workflows/actions.yml/badge.svg)](https://github.com/lsdo_project_template/lsdo_project_template/actions)
-[![Forks](https://img.shields.io/github/forks/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/network)
-[![Issues](https://img.shields.io/github/issues/LSDOlab/lsdo_project_template.svg)](https://github.com/LSDOlab/lsdo_project_template/issues)
+[![GitHub Actions Test Badge](https://github.com/HgXe/CSDmL/actions/workflows/actions.yml/badge.svg)](https://github.com/HgXe/CSDmL/actions)
+[![Forks](https://img.shields.io/github/forks/HgXe/CSDmL.svg)](https://github.com/HgXe/CSDmL/network)
+[![Issues](https://img.shields.io/github/issues/HgXe/CSDmL.svg)](https://github.com/HgXe/CSDmL/issues)
 
 
-Basic machine learning library for CSDL. WIP
+Basic machine learning library for CSDL. WARNING: WIP - This library is still under development and may not be stable.
 
 
 # Installation
@@ -24,6 +24,9 @@ For direct installation with all dependencies, run on the terminal or command li
 pip install git+https://github.com/HgXe/CSDmL.git
 ```
 
+Installing JAX and optax is highly recommended for the library to work properly. See [JAX](https://jax.readthedocs.io/en/latest/installation.html#installation), [Optax](https://optax.readthedocs.io/en/latest/) for installation instructions.
+
+Tested with Python 3.8 and 3.9. Other versions may work but are not guaranteed.
 
 <!-- **Enabled by**: `packages=find_packages()` in the `setup.py` file. -->
 
