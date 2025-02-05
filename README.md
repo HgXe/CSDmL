@@ -57,7 +57,7 @@ Y_test = np.sin(X_test)
 
 # define neural network
 activation = ['relu', 'tanh', 'tanh', 'tanh', 'tanh']
-model = FCNN(1, [20, 20, 20, 20], 1, activation=activation)
+model = csdml.FCNN(1, [20, 20, 20, 20], 1, activation=activation)
 loss_data = X, y
 
 # train model
