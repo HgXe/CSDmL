@@ -127,3 +127,30 @@ if __name__ == '__main__':
 
     optimizer = jax_opt.adam(1e-3)
     model.train_jax_opt(optimizer, loss_data, test_data=(X_test, T_test, Y_test), num_epochs=epochs, device=device)
+
+
+    test_data = np.load('test.npz')
+    X_test = test_data['X_test0']
+    T_test = test_data['X_test1']
+    Y_test = test_data['y_test']
+
+    train_data = np.load('train.npz')
+    X = train_data['X_train0']
+    T = train_data['X_train1']
+    y = train_data['y_train']
+
+
+    m = 240
+    epochs = 20000
+    dim_x = 1
+    lr = 0.001
+    device = jax.devices('gpu')[0]
+
+    branch = FCNN(m, [100], 100, activation='gelu')
+    trunk = FCNN(dim_x, [100], 100, activation='gelu')
+
+    model = DeepOnet(trunk, branch)
+
+
+    optimizer = jax_opt.adam(1e-3)
+    model.train_jax_opt(optimizer, loss_data, device)

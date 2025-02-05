@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CSDmL"
+description = "Python package for building neural networks in CSDL"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE.txt"}
+keywords = ["CSDL", "auto-differentation", "machine-learning", "optimization", "neural-networks"]
+authors = [{name = "Michael Warner", email = "hgxe14@gmail.com"}]
+dependencies = [
+    'numpy',
+    'scipy',
+    'scikit-learn',
+    'matplotlib',
+    'csdl_alpha @ git+https://github.com/LSDOlab/CSDL_alpha.git',
+]
+dynamic = ['version']
+
+[project.optional-dependencies]
+test = [
+    'pytest',
+    'jax',
+    'optax',
+]
+docs = [
+    'myst-nb',
+    'sphinx==5.3.0',
+    'sphinx_rtd_theme',
+    'sphinx-copybutton',
+    'sphinx-autoapi==2.1.0',
+    'astroid==2.15.5',
+    'numpydoc',
+    'gitpython',
+    'sphinxcontrib-collections @ git+https://github.com/anugrahjo/sphinx-collections.git',
+    'sphinxcontrib-bibtex',
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "csdml.__version__"}
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+exclude = ["tutorials"]

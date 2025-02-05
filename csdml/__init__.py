@@ -4,3 +4,4 @@ from .core.generator import Generator
 from .core.neural_networks.neural_net import NeuralNetwork
 from .core.neural_networks.fcnn import FCNN
 from .core.neural_networks.deepOnet import DeepOnet
+from .core.activation_functions import softplus, relu_approximate, parametric_relu

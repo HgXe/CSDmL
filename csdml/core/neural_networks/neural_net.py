@@ -1,14 +1,19 @@
 import csdl_alpha as csdl
 import numpy as np
-from csdml.core.activation_functions import gelu
-from jax.example_libraries import optimizers as jax_opt
-from csdl_alpha.backends.jax.graph_to_jax import create_jax_interface, create_jax_function
-from jax import jit as jjit
+from csdl_alpha.backends.jax.graph_to_jax import create_jax_function
 import jax.numpy as jnp
 from time import time
-import jax
 from typing import Union
 
+try:
+    import optax
+except ImportError:
+    raise Warning('optax not installed. Please install optax to use the train_jax_opt method')
+
+try:
+    from jax import jit as jjit
+except ImportError:
+    raise Warning('jax not installed. Please install jax to use training methods')
 
 class NeuralNetwork():
     '''
@@ -35,7 +40,7 @@ class NeuralNetwork():
     def __call__(self, x):
         return self.forward(x)
 
-    def train(self, X, y):
+    def _train(self, X, y):
         rec_outer = csdl.get_current_recorder()
         rec_outer.stop()
 
@@ -76,7 +81,29 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
+    def train_jax_opt(self, optimizer:Union[list, optax.GradientTransformation], loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
+        """
+        Train the neural network using JAX optimizers or optax optimizers
+
+        Parameters
+        ----------
+        optimizer : Union[list, optax.GradientTransformation]
+            JAX optimizer or optax optimizer
+        loss_data : tuple
+            loss_data = X_train, targets
+        num_batches : int, optional
+            Number of batches to use for training. The default is 10.
+        num_epochs : int, optional
+            Number of epochs to train. The default is 100.
+        test_data : tuple, optional
+            test_data = X_test, Y_test. The default is None.
+        plot : bool, optional
+            Whether to plot the loss history. The default is True.
+        device : str, optional
+            Device to use for training. The default is None.
+
+        """
+        
         # turn off the outer recorder
         rec_outer = csdl.get_current_recorder()
         rec_outer.stop()
@@ -100,32 +127,41 @@ class NeuralNetwork():
 
         # compute the loss
         if self.loss_function == 'mse':
-            loss = csdl.norm((Y_var_batch - y_pred))
+            loss = csdl.norm((Y_var_batch - y_pred))/batch_size
         elif callable(self.loss_function):
-            loss = self.loss_function(Y_var_batch, y_pred)
+            loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
         else:
             raise ValueError('Invalid loss function')
         loss.set_as_objective()
 
-        # optimize the design variables
-        opt_init, opt_update, get_params = optimizer
-
-        train_step = generate_jax_opt_step(X_var_batch, Y_var_batch, opt_update, get_params)
-
         dvs = [var for var in rec_inner.design_variables.keys()]
-        x0 = [jnp.array(dv.value) for dv in dvs]
-        opt_state = opt_init(x0)
+
 
         # build test function
         if test_data is not None:
             X_test, Y_test = test_data
-            y_pred = self.forward(X_test)
+            X_test_var = csdl.Variable(value=X_test)
+            Y_test_var = csdl.Variable(value=Y_test)
+            y_pred = self.forward(X_test_var)
             if self.loss_function == 'mse':
-                test_loss = csdl.norm((Y_test - y_pred))
+                test_loss = csdl.norm((Y_test_var - y_pred))/X_test.shape[0]
             elif callable(self.loss_function):
-                test_loss = self.loss_function(Y_test, y_pred)
+                test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
 
+        # Build optimization step
+        net_params = [jnp.array(dv.value) for dv in dvs]
+        
+        if isinstance(optimizer, optax.GradientTransformation):
+            train_step = generate_optax_step(X_var_batch, Y_var_batch, optimizer)
+            opt_state = optimizer.init(net_params)
+        else:
+            opt_init, opt_update, get_params = optimizer
+            train_step = generate_jax_opt_step(X_var_batch, Y_var_batch, opt_update, get_params)
+            opt_state = opt_init(net_params)
+        train_step = jjit(train_step, device=device)
+
+        # run optimization loop
         loss_history = []
         test_loss_history = []
         start = time()
@@ -136,11 +172,10 @@ class NeuralNetwork():
 
                 loss_data = X_batch, Y_batch
                 
-                loss, opt_state = train_step(ibatch, opt_state, loss_data)
+                loss, net_params, opt_state = train_step(ibatch, net_params, opt_state, loss_data)
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
-                    x_i = get_params(opt_state)
-                    test_loss = jax_test_fn(*x_i)[0]
+                    test_loss = jax_test_fn(*net_params)[0]
                     test_loss_history.append(float(test_loss[0]))
 
 
@@ -162,8 +197,7 @@ class NeuralNetwork():
             plt.show()
         
         # extract values of the design variables
-        xf = get_params(opt_state)
-        param_vals = [np.array(x) for x in xf]
+        param_vals = [np.array(x) for x in net_params]
 
         # switch back to the outer recorder
         rec_inner.stop()
@@ -192,15 +226,46 @@ def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
 
     jax_fn = create_jax_function(rec.active_graph, outputs=[obj]+grads, inputs=[X_var, Y_var] + dvs)
 
-    @jjit
-    def train_step(step_i, opt_state, loss_data):
+    def train_step(step_i, net_params, opt_state, loss_data):
+    
+        outputs = jax_fn(*loss_data, *net_params)
+        loss = outputs[0]
+        grads = [out.reshape(param.shape) for out, param in zip(outputs[1:], net_params)]
+
+        opt_state = opt_update(step_i, grads, opt_state)
         net_params = get_params(opt_state)
+
+        return loss, net_params, opt_state
+
+    return train_step
+
+def generate_optax_step(X_var, Y_var, optimizer:optax.GradientTransformation):
+    '''
+    
+    Parameters
+    ----------
+    rec : csdl.Recorder
+        DESCRIPTION.
+    '''
+
+    rec = csdl.get_current_recorder()
+
+    dvs = [var for var in rec.design_variables.keys()]
+    obj = [var for var in rec.objectives.keys()][0]
+    grad = csdl.derivative(obj, dvs, as_block=False)
+    grads = [grad[dv] for dv in dvs]
+
+    jax_fn = create_jax_function(rec.active_graph, outputs=[obj]+grads, inputs=[X_var, Y_var] + dvs)
+
+    def train_step(step_i, net_params, opt_state, loss_data):
 
         outputs = jax_fn(*loss_data, *net_params)
         loss = outputs[0]
         grads = [out.reshape(param.shape) for out, param in zip(outputs[1:], net_params)]
 
-        return loss, opt_update(step_i, grads, opt_state)
+        updates, opt_state = optimizer.update(grads, opt_state, net_params)
+        net_params = optax.apply_updates(net_params, updates)
+
+        return loss, net_params, opt_state
 
     return train_step
-
