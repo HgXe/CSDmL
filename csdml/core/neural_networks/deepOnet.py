@@ -8,12 +8,14 @@ class DeepOnet(NeuralNetwork):
         self.trunk = trunk
         self.branch = branch
         self.output_dim = output_dim
-        super().__init__(loss_function, self.trunk.parameters + self.branch.parameters)
+        self.bias = csdl.Variable(value=np.random.randn(output_dim))
+        super().__init__(loss_function, self.trunk.parameters + self.branch.parameters + [self.bias])
 
     def init_parameters(self):
         self.trunk.init_parameters()
         self.branch.init_parameters()
-        self.parameters = self.trunk.parameters + self.branch.parameters
+        self.bias = csdl.Variable(value=np.random.randn(self.output_dim))
+        self.parameters = self.trunk.parameters + self.branch.parameters + [self.bias]
 
     def forward(self, x, t=None):
         
@@ -29,8 +31,7 @@ class DeepOnet(NeuralNetwork):
         if self.output_dim != 1:
             raise NotImplementedError('Output dim other than 1 is not implemented')
 
-        # TODO: consider adding bias here
-        return csdl.einsum(z, y, action='ij,ij->i').reshape(-1, 1)
+        return csdl.einsum(z, y, action='ij,ij->i').reshape(-1, 1) + self.bias
 
 
     def train_jax_opt(self, optimizer:list, loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
@@ -45,7 +46,7 @@ class DeepOnet(NeuralNetwork):
         else:
             repackaged_test_data = None
 
-        super().train_jax_opt(optimizer, repackaged_loss_data, num_batches, num_epochs, repackaged_test_data, plot, device)
+        return super().train_jax_opt(optimizer, repackaged_loss_data, num_batches, num_epochs, repackaged_test_data, plot, device)
 
     # def train(self, X, T, y):
     #     rec_outer = csdl.get_current_recorder()
@@ -141,7 +142,7 @@ if __name__ == '__main__':
 
 
     m = 240
-    epochs = 20000
+    epochs = 20
     dim_x = 1
     lr = 0.001
     device = jax.devices('gpu')[0]

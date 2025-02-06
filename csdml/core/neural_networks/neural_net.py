@@ -164,6 +164,8 @@ class NeuralNetwork():
         # run optimization loop
         loss_history = []
         test_loss_history = []
+        best_test_loss = np.inf
+        best_params = net_params
         start = time()
         for epoch in range(num_epochs):
             for ibatch in range(num_batches):
@@ -177,6 +179,9 @@ class NeuralNetwork():
                 if test_data is not None:
                     test_loss = jax_test_fn(*net_params)[0]
                     test_loss_history.append(float(test_loss[0]))
+                    if test_loss < best_test_loss:
+                        best_test_loss = test_loss
+                        best_params = net_params
 
 
         end = time()
@@ -206,6 +211,11 @@ class NeuralNetwork():
         # create new parameters and set the values
         self.init_parameters()
         self.set_param_values(param_vals)
+
+        if test_data is not None:
+            best_param_vals = [np.array(x) for x in best_params]
+            return loss_history, test_loss_history, best_param_vals
+        return loss_history, test_loss_history
 
 def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
     '''
