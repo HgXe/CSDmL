@@ -77,8 +77,8 @@ class Generator():
             if bounds[1] is None:
                 bounds[1] = np.ones(input.shape) * 0
 
-        upper = np.vstack([self.inputs[input][0].flatten() for input in self.inputs]).flatten()
-        lower = np.vstack([self.inputs[input][1].flatten() for input in self.inputs]).flatten()
+        upper = np.hstack([self.inputs[input][0].flatten() for input in self.inputs]).flatten()
+        lower = np.hstack([self.inputs[input][1].flatten() for input in self.inputs]).flatten()
 
         n_samples = samples_per_dim ** sum(dims)
         samples = qmc.LatinHypercube(d=sum(dims)).random(n_samples)

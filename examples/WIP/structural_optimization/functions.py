@@ -45,6 +45,37 @@ def map_parametric_wing_pressure(coords):
     return out
 
 
+def map_right_wing(coords):
+    # same as above, but only for the right wing
+    #   map of input coordinates
+    #   o is the origin of each index
+    #   x is the output origin
+    #   u is horizontal, v is vertical (sometimes flipped)
+    #   o──────────┐    (TE)
+    #   │          │
+    #   │    11    │    bottom
+    #   │          │
+    #   └──────────┘    (LE)
+    #   o──────────┐    (LE)
+    #   │          │
+    #   │    12    │    top
+    #   │          │
+    #   └──────────┘    (TE)
+    out = np.zeros((len(coords), 2))
+
+    for i, coord in enumerate(coords):
+        ind, uv = coord
+        if len(uv.shape) == 1:
+            uv = uv.reshape(1, -1)
+        u, v = uv[:, 0], uv[:, 1]
+        if ind == 11:
+            out[i,:] = np.hstack((u, 1-v*0.5))
+        elif ind == 12:
+            out[i,:] = np.hstack((u, 0.5-v*0.5))
+
+    return out
+
+
 if __name__ == "__main__":
     # Test the function
     coords = [(11, (0, 0)), (12, (0, 0)), (19, (0, 0)), (20, (0, 0))]

@@ -4,16 +4,22 @@ from csdl_alpha.backends.jax.graph_to_jax import create_jax_function
 import jax.numpy as jnp
 from time import time
 from typing import Union
+import warnings
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from optax import GradientTransformation
+
 
 try:
     import optax
 except ImportError:
-    raise Warning('optax not installed. Please install optax to use the train_jax_opt method')
+    warnings.warn('optax not installed. Please install optax to use the train_jax_opt method')
 
 try:
     from jax import jit as jjit
 except ImportError:
-    raise Warning('jax not installed. Please install jax to use training methods')
+    warnings.warn('jax not installed. Please install jax to use training methods')
 
 class NeuralNetwork():
     '''
@@ -81,7 +87,7 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def train_jax_opt(self, optimizer:Union[list, optax.GradientTransformation], loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
+    def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -249,7 +255,7 @@ def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
 
     return train_step
 
-def generate_optax_step(X_var, Y_var, optimizer:optax.GradientTransformation):
+def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation"):
     '''
     
     Parameters
