@@ -287,7 +287,7 @@ def define_base_config(caddee : cd.CADDEE):
 
     wing_oml_coefficients = wing_oml.stack_coefficients()
     wing_oml_coefficients.add_name('wing_oml_coefficients')
-    generator.add_output(wing_oml_coefficients)
+    # generator.add_output(wing_oml_coefficients)
 
     mono_wing_oml_coefficients = mono_wing_function.stack_coefficients()
     mono_wing_oml_coefficients.add_name('mono_wing_oml_coefficients')
@@ -296,7 +296,6 @@ def define_base_config(caddee : cd.CADDEE):
     # print(mono_wing_function.stack_coefficients().shape)
     # exit()
     return pressure_coeffs
-
 
 def define_conditions(caddee: cd.CADDEE):
     conditions = caddee.conditions
@@ -323,173 +322,12 @@ def define_analysis(caddee: cd.CADDEE):
     cruise.finalize_meshes()
     mesh_container = cruise.configuration.mesh_container
 
-    # # run VLM 
-    # vlm_outputs, implicit_disp_coeffs = run_vlm([mesh_container], [cruise])
-    # forces = vlm_outputs.surface_force[0][0]
-    # Cp = vlm_outputs.surface_spanwise_Cp[0][0]
-    
-    # # trim the aircraft
-    # pitch_angle = cruise.quantities.pitch_angle
-    # z_force = -forces[2]*csdl.cos(pitch_angle) + forces[0]*csdl.sin(pitch_angle)
-    # residual = z_force - mass*9.81*load_factor
-    # trim_solver = csdl.nonlinear_solvers.BracketedSearch()
-    # trim_solver.add_state(pitch_angle, residual, (np.deg2rad(0), np.deg2rad(10)))
-    # with HiddenPrints():
-    #     # The vlm solver prints stuff every time it's called and it annoys me
-    #     trim_solver.run()
-
-    # # fit pressure function to trimmed VLM results
-    # # we can actually do this before the trim if we wanted, it would be updated automatically
-    # pressure_fn = fit_pressure_fn(mesh_container, cruise, Cp)
-
-    # return
-
     pressure_fn = wing.quantities.pressure_function
     displacement, shell_outputs = run_shell(mesh_container, cruise, pressure_fn, rec=True)
 
     disp_coeffs = displacement.stack_coefficients()
     disp_coeffs.add_name('displacement_coefficients')
     generator.add_output(disp_coeffs)
-
-    # # Run structural analysis
-    # if shell:
-    #     displacement, shell_outputs = run_shell(mesh_container, cruise, pressure_fn, rec=True)
-    #     max_stress:csdl.Variable = shell_outputs.aggregated_stress
-    #     wing_mass:csdl.Variable = shell_outputs.mass
-    # else:
-    #     displacement, max_stress, wing_mass = run_beam(mesh_container, cruise, pressure_fn)
-
-    # mirror_function(displacement, wing.quantities.oml_lr_map)
-
-    # max_stress.set_as_constraint(upper=stress_bound, scaler=1e-8)
-    # max_stress.add_name('max_stress')
-    # wing_mass.set_as_objective(scaler=1e-2)
-    # wing_mass.add_name('wing_mass')
-    # wing.quantities.oml_displacement = displacement
-    # wing.quantities.pressure_function = pressure_fn
-
-    # # Solver for aerostructural coupling
-    # # we iterate between the VLM and structural analysis until the displacement converges
-    # if couple:
-    #     coeffs = displacement.stack_coefficients()
-    #     disp_res = implicit_disp_coeffs[0] - coeffs
-    #     solver = csdl.nonlinear_solvers.Jacobi(max_iter=10, tolerance=1e-6)
-    #     solver.add_state(implicit_disp_coeffs[0], disp_res)
-    #     solver.run()
-
-def run_vlm(mesh_containers, conditions):
-    # implicit displacement input
-    wing = conditions[0].configuration.system.comps["wing"]
-    displacement_space:fs.FunctionSetSpace = wing.quantities.oml_displacement_space
-    implicit_disp_coeffs = []
-    implicit_disp_fns = []
-    for i in range(len(mesh_containers)):
-        coeffs, function = displacement_space.initialize_function(3, implicit=True)
-        implicit_disp_coeffs.append(coeffs)
-        implicit_disp_fns.append(function)
-
-    # set up VLM analysis
-    nodal_coords = []
-    nodal_vels = []
-
-    for mesh_container, condition, disp_fn in zip(mesh_containers, conditions, implicit_disp_fns):
-        transfer_mesh_para = disp_fn.generate_parametric_grid((5, 5))
-        transfer_mesh_phys = wing.geometry.evaluate(transfer_mesh_para)
-        transfer_mesh_disp = disp_fn.evaluate(transfer_mesh_para)
-        
-        wing_lattice = mesh_container["vlm_mesh"].discretizations["wing_chord_surface"]
-        wing_lattic_coords = wing_lattice.nodal_coordinates
-
-        map = fs.NodalMap()
-        weights = map.evaluate(csdl.reshape(wing_lattic_coords, (np.prod(wing_lattic_coords.shape[0:-1]), 3)), transfer_mesh_phys)
-        wing_camber_mesh_displacement = (weights @ transfer_mesh_disp).reshape(wing_lattic_coords.shape)
-        
-        nodal_coords.append(wing_lattic_coords + wing_camber_mesh_displacement)
-        nodal_vels.append(wing_lattice.nodal_velocities) # the velocities should be the same for every node in this case
-
-    if len(nodal_coords) == 1:
-        nodal_coordinates = nodal_coords[0]
-        nodal_velocities = nodal_vels[0]
-    else:
-        nodal_coordinates = csdl.vstack(nodal_coords)
-        nodal_velocities = csdl.vstack(nodal_vels)
-
-    # Add an airfoil model
-    nasa_langley_airfoil_maker = ThreeDAirfoilMLModelMaker(
-        airfoil_name="ls417",
-        aoa_range=np.linspace(-12, 16, 50), 
-        reynolds_range=[1e5, 2e5, 5e5, 1e6, 2e6, 4e6, 7e6, 10e6], 
-        mach_range=[0., 0.2, 0.3, 0.4, 0.5, 0.6],
-        num_interp=120,
-    )
-    Cl_model = nasa_langley_airfoil_maker.get_airfoil_model(quantities=["Cl"])
-    Cd_model = nasa_langley_airfoil_maker.get_airfoil_model(quantities=["Cd"])
-    Cp_model = nasa_langley_airfoil_maker.get_airfoil_model(quantities=["Cp"])
-    alpha_stall_model = nasa_langley_airfoil_maker.get_airfoil_model(quantities=["alpha_Cl_min_max"])
-
-    vlm_outputs = vlm_solver(
-        mesh_list=[nodal_coordinates],
-        mesh_velocity_list=[nodal_velocities],
-        atmos_states=conditions[0].quantities.atmos_states,
-        airfoil_alpha_stall_models=[alpha_stall_model],
-        airfoil_Cd_models=[Cd_model],
-        airfoil_Cl_models=[Cl_model],
-        airfoil_Cp_models=[Cp_model], 
-    )
-
-    return vlm_outputs, implicit_disp_coeffs
-
-def fit_pressure_fn(mesh_container, condition, spanwise_Cp):
-    wing:cd.Component = condition.configuration.system.comps["wing"]
-    vlm_mesh = mesh_container["vlm_mesh"]
-    rho = condition.quantities.atmos_states.density
-    v_inf = condition.parameters.speed
-    airfoil_upper_nodes = wing_lattice._airfoil_upper_para
-    airfoil_lower_nodes = wing_lattice._airfoil_lower_para
-
-    spanwise_p = spanwise_Cp * 0.5 * rho * v_inf**2
-    spanwise_p = csdl.blockmat([[spanwise_p[:, 0:120].T()], [spanwise_p[:, 120:].T()]])
-
-    pressure_indexed_space : fs.FunctionSetSpace = wing.quantities.pressure_space
-    pressure_function = pressure_indexed_space.fit_function_set(
-        values=spanwise_p.reshape((-1, 1)), parametric_coordinates=airfoil_upper_nodes+airfoil_lower_nodes,
-        regularization_parameter=1e-4,
-    )
-
-    # fitting_error = np.linalg.norm(((spanwise_p.reshape((-1, )) - pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes))/spanwise_p.reshape((-1,))).value)
-    # print(f"Pressure function fitting error: {fitting_error}")
-
-    # oml:fs.FunctionSet = wing.quantities.mono_wing_function
-    # oml.plot_but_good(color=pressure_function, grid_n=101)
-    # exit()
-
-    pressure_function_coefficients = pressure_function.stack_coefficients()
-    pressure_function_coefficients.add_name('pressure_function')
-    generator.add_output(pressure_function_coefficients)
-
-    # pressure_eval_pts = airfoil_upper_nodes + airfoil_lower_nodes
-    # for i in range(len(pressure_eval_pts)):
-    #     pressure_eval_pts[i] = [pressure_eval_pts[i][0], pressure_eval_pts[i][1][0, 0], pressure_eval_pts[i][1][0, 1]]
-    # pressure_eval_pts = np.array(pressure_eval_pts)
-    # np.savetxt('pressure_eval_pts.txt', pressure_eval_pts)
-    # exit()
-    para_grid = np.array(np.meshgrid(np.linspace(0, 1, 10), np.linspace(0, 1, 25))).reshape((2, -1)).T
-    # np.savetxt('pressure_eval_pts_2.txt', para_grid)
-    # exit()
-    para_grid = [(-1, para_grid[i].reshape(1,-1)) for i in range(para_grid.shape[0])]
-    # pressure_eval = pressure_function.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
-    pressure_eval = pressure_function.evaluate(para_grid)
-    # wing.quantities.mono_wing_function.evaluate(para_grid, plot=True)
-    # exit()
-    pressure_eval.add_name('pressure_eval')
-    generator.add_output(pressure_eval)
-
-    # geo_eval = wing.geometry.evaluate(airfoil_upper_nodes+airfoil_lower_nodes)
-    geo_eval = wing.quantities.mono_wing_function.evaluate(para_grid)
-    geo_eval.add_name('geo_eval')
-    generator.add_output(geo_eval)
-
-    return pressure_function
 
 def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, pressure_function, rec=False):
     wing = condition.configuration.system.comps["wing"]
@@ -559,73 +397,6 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
     oml_displacement_function = oml_displacement_space.fit_function_set(disp_extracted[oml_node_inds], oml_nodes_parametric)
 
     return oml_displacement_function, shell_outputs
-
-def run_beam(mesh_container, condition, pressure_fn):
-    wing = condition.configuration.system.comps["wing"]
-    beam_mesh = mesh_container["beam_mesh"]
-    wing_box = beam_mesh.discretizations["wing"]
-    aluminum = wing.quantities.material_properties.material
-
-    box_beam = mesh_container["beam_mesh"].discretizations["wing"]
-    beam_nodes = box_beam.nodal_coordinates
-
-    box_cs = af.CSBox(
-        ttop=wing_box.top_skin_thickness,
-        tbot=wing_box.bottom_skin_thickness,
-        tweb=wing_box.shear_web_thickness,
-        height=wing_box.beam_height,
-        width=wing_box.beam_width,
-    )
-    beam = af.Beam(
-        name="wing_beam", 
-        mesh=wing_box.nodal_coordinates, 
-        cs=box_cs,
-        material=aluminum,
-    )
-
-    # transfer aero forces
-    right_wing_oml_inds = list(wing.quantities.right_wing_oml.functions)
-    force_magnitudes, force_para_coords = pressure_fn.integrate(wing.geometry, grid_n=30, indices=right_wing_oml_inds)
-    force_coords = wing.geometry.evaluate(force_para_coords)
-    force_normals = wing.geometry.evaluate_normals(force_para_coords)
-    force_vectors = force_normals*csdl.expand(force_magnitudes.flatten(), force_normals.shape, 'i->ij')
-
-    mapper = fs.NodalMap(weight_eps=5)
-    force_map = mapper.evaluate(force_coords, beam_nodes.reshape((-1, 3)))
-    beam_forces = force_map.T() @ force_vectors
-
-    beam_forces_plus_moments = csdl.Variable(shape=(beam_forces.shape[0], 6), value=0)
-    beam_forces_plus_moments = beam_forces_plus_moments.set(
-        csdl.slice[:, 0:3], beam_forces
-    )
-
-    beam.add_boundary_condition(node=0, dof=[1, 1, 1, 1, 1, 1])
-    beam.add_load(beam_forces_plus_moments)
-
-    frame = af.Frame()
-    frame.add_beam(beam)
-
-    struct_solution = frame.evaluate()
-
-    beam_displacement = struct_solution.get_displacement(beam)
-    beam_stress = struct_solution.get_stress(beam)
-
-    # transfer displacements to oml
-    mapper = fs.NodalMap(weight_eps=5, weight_to_be_normalized=True)
-    oml_mesh_parametric = wing.quantities.right_wing_oml.generate_parametric_grid((10, 10))
-    oml_mesh_phys = wing.geometry.evaluate(oml_mesh_parametric)
-    disp_map = mapper.evaluate(oml_mesh_phys, beam_nodes.reshape((-1, 3)))
-    disp = disp_map @ beam_displacement
-    oml_displacement_space:fs.FunctionSetSpace = wing.quantities.oml_displacement_space
-    oml_displacement_function = oml_displacement_space.fit_function_set(disp, oml_mesh_parametric)
-
-    # get wing mass
-    mass_fn = af.FrameMass()
-    mass_fn.add_beam(beam)
-    wing_mass_prop = mass_fn.evaluate()
-    wing_mass = wing_mass_prop.mass
-
-    return oml_displacement_function, beam_stress, wing_mass
 
 def process_elements(wing_shell_mesh, right_wing_oml, right_wing_ribs, right_wing_spars):
     """
@@ -729,118 +500,7 @@ define_analysis(caddee)
 csdl.save_optimization_variables()
 
 
-# for sampling, I want n different samples of the pressure coefficients, where n is the number of pressure coefficients
-# in this case, n = 20*40 = 800
-# I want to distribute these coefficient vectors across the samples of the design variables - root twist, tip twist, aspect ratio
-# If we do 20 samples of each, we will have 20*20*20 = 8000 samples, so 10 samples per coefficient vector
-samples_per_dim = 20
-filename = 'struct_opt_geo_test_03'
-# function for running the model
-function = generator._build_generator_function()
-
-# make input dict sans coefficients
-inputs = {input:bounds for input, bounds in generator.inputs.items() if input != pressure_coeffs}
-
-# Generate the 800 coefficient vectors - want these to be linearly independent - values between -1 and 1
-# a random matrix is usually full rank
-dim = np.prod(pressure_coeffs.shape)
-coefficients = np.random.rand(dim, dim)*2 - 1
-
-# Generate the 8000 samples - latin hypercube sampling
-from scipy.stats import qmc
-dims = []
-for input, bounds in inputs.items():
-    print(input.name)
-    dims.append(np.prod(input.shape))
-    # apply default bounds
-    if bounds[0] is None:
-        bounds[0] = np.ones(input.shape) * 1
-    if bounds[1] is None:
-        bounds[1] = np.ones(input.shape) * 0
-
-upper = np.hstack([inputs[input][0].flatten() for input in inputs]).flatten()
-lower = np.hstack([inputs[input][1].flatten() for input in inputs]).flatten()
-n_samples = samples_per_dim ** sum(dims)
-samples = qmc.LatinHypercube(d=sum(dims)).random(n_samples)
-scaler = upper - lower
-offset = lower
-samples = samples * scaler + offset
-
-# samples should be a 2D array with n_samples rows and sum(dims) columns - in this case, 8000 rows and 3 columns
-# now we add the pressure coefficient vectors to the samples, final shape should be 8000 rows and 803 columns
-# the coefficients should be added to the end of the samples, and repeated 10 times
-# it's on the end because it was added last.
-samples = np.hstack([samples, np.tile(coefficients, (n_samples//dim, 1))])
-
-# re-make dims array to include the coefficients
-dims.append(dim)
-
-print_interval = n_samples // 10
-
-import time
-
-for n, sample in enumerate(samples):
-    if n % print_interval == 0:
-        print(f'Generating samples {n}-{min(n+print_interval, n_samples)} of {n_samples}')
-
-    ind = 0
-    in_dict = {}
-    for i, input in enumerate(generator.inputs):
-        in_dict[input] = sample[ind:ind+dims[i]].reshape(input.shape)
-        ind += dims[i]
-
-    start = time.time()
-    result = function(in_dict)
-    end = time.time()
-    print(f'Function call took {end-start} seconds')
-    generator._export_h5py(filename, {**in_dict, **result}, f'sample_{n}')
-
-    # just going to run the first 10 to make sure everything is working
-    if n == 9:
-        break
+generator.generate(filename='struct_opt_geo_test_04', n_samples=10)
 
 exit()
 
-# generator.generate(filename='struct_opt_geo_test_01', samples_per_dim=1)
-# exit()
-
-# fname = 'structural_opt_beam_test'
-# if optimize:
-#     from modopt import CSDLAlphaProblem
-#     from modopt import PySLSQP
-
-    
-#     # If you have a GPU, you can set gpu=True - but it may not be faster
-#     # I think this is because the ml airfoil model can't be run on the GPU when Jax is using it
-#     # sim = csdl.experimental.JaxSimulator(rec, gpu=False, save_on_update=True, filename=fname)
-#     sim = csdl.experimental.PySimulator(rec)
-#     sim.compute_totals()
-
-#     # If you don't have jax installed, you can use the PySimulator instead (it's slower)
-#     # To install jax, see https://jax.readthedocs.io/en/latest/installation.html
-#     # sim = csdl.experimental.PySimulator(rec)
-
-#     # It's a good idea to check the totals of the simulator before running the optimizer
-#     # sim.check_totals()
-#     # exit()
-
-#     prob = CSDLAlphaProblem(problem_name=fname, simulator=sim)
-#     optimizer = PySLSQP(prob, solver_options={'maxiter':200, 'acc':1e-6})
-
-#     # Solve your optimization problem
-#     optimizer.solve()
-#     optimizer.print_results()
-#     csdl.inline_export(fname+'_final')
-
-
-# # Plotting
-# # load dv values and perform an inline execution to get the final results
-# load_dv_values(fname+'_final.hdf5', 'inline')
-# rec.execute()
-# wing = caddee.base_configuration.system.comps["wing"]
-# mesh = wing.quantities.oml.plot_but_good(color=wing.quantities.material_properties.thickness)
-# wing.quantities.oml.plot_but_good(color=wing.quantities.oml_displacement)
-# wing.quantities.oml.plot_but_good(color=wing.quantities.pressure_function)
-
-
-# csdl.visualize_graph()

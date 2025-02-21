@@ -64,7 +64,7 @@ class Generator():
         
         return interface
 
-    def generate(self, filename:str='data', samples_per_dim:int=10):
+    def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None, time_samples:bool=False):
         function = self._build_generator_function()
         # in future, use the estimated input probability distribution to sample the input variables
         # for now we will just sample the inputs via LHS
@@ -80,13 +80,17 @@ class Generator():
         upper = np.hstack([self.inputs[input][0].flatten() for input in self.inputs]).flatten()
         lower = np.hstack([self.inputs[input][1].flatten() for input in self.inputs]).flatten()
 
-        n_samples = samples_per_dim ** sum(dims)
+        if n_samples is None:
+            n_samples = samples_per_dim ** sum(dims)
+        else:
+            n_samples = n_samples
         samples = qmc.LatinHypercube(d=sum(dims)).random(n_samples)
         scaler = upper - lower
         offset = lower
         samples = samples * scaler + offset
 
         print_interval = n_samples // 10
+        import time
 
         for n, sample in enumerate(samples):
             if n % print_interval == 0:
@@ -98,7 +102,13 @@ class Generator():
                 in_dict[input] = sample[ind:ind+dims[i]].reshape(input.shape)
                 ind += dims[i]
 
+            if time_samples:
+                start = time.time()
+
             result = function(in_dict)
+            if time_samples:
+                print(f'Generated sample {n} in {time.time() - start} seconds')
+                
             self._export_h5py(filename, {**in_dict, **result}, f'sample_{n}')
 
     def _export_h5py(self, filename:str, data:dict, groupname:str):
