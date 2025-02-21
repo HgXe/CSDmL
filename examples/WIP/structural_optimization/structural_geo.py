@@ -10,6 +10,7 @@ from functions import map_parametric_wing_pressure, map_right_wing
 
 from femo_alpha.rm_shell.rm_shell_model import RMShellModel
 from femo_alpha.fea.utils_dolfinx import readFEAMesh, reconstructFEAMesh
+from pathlib import Path
 
 # Settings
 couple = False
@@ -36,7 +37,7 @@ generator = ml.Generator(recorder=rec)
 
 # Initialize CADDEE and import geometry
 caddee = cd.CADDEE()
-c172_geom = cd.import_geometry('c172.stp')
+c172_geom = cd.import_geometry('c172.stp', file_path=Path('./'))
 
 def define_base_config(caddee : cd.CADDEE):
     aircraft = cd.aircraft.components.Aircraft(geometry=c172_geom)
@@ -733,7 +734,7 @@ csdl.save_optimization_variables()
 # I want to distribute these coefficient vectors across the samples of the design variables - root twist, tip twist, aspect ratio
 # If we do 20 samples of each, we will have 20*20*20 = 8000 samples, so 10 samples per coefficient vector
 samples_per_dim = 20
-filename = 'struct_opt_geo_test_02'
+filename = 'struct_opt_geo_test_03'
 # function for running the model
 function = generator._build_generator_function()
 

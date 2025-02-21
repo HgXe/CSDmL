@@ -41,12 +41,13 @@ pip install git+https://github.com/LSDOlab/CADDEE_alpha.git
 
 # 5.5 Install specific branch of lsdo_function_spaces
 echo "Installing lsdo_function_spaces..."
+pip uninstall lsdo_function_spaces
 pip install git+https://github.com/LSDOlab/lsdo_function_spaces.git@patch_parametric_maps
 
 
 # 6. Install femo_alpha as a user
 echo "Installing femo_alpha..."
-pip install git+https://github.com/LSDOlab/femo_alpha.git
+pip install -U git+https://github.com/LSDOlab/femo_alpha.git
 
 # # 6. Install lsdo_function_spaces using pip
 # echo "Installing lsdo_function_spaces..."
