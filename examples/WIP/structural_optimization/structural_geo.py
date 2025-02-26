@@ -342,7 +342,12 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
     element_centers_parametric = wing_shell_mesh.element_centers_parametric
     oml_node_inds = wing_shell_mesh.oml_node_inds
     oml_nodes_parametric = wing_shell_mesh.oml_nodes_parametric
-    node_disp = wing.geometry.evaluate(nodes_parametric) - nodes.reshape((-1,3))
+
+    new_nodes = wing.geometry.evaluate(nodes_parametric)
+    new_nodes_oml = new_nodes[oml_node_inds]
+    new_nodes_oml.add_name('nodal_geometry')
+    generator.add_output(new_nodes_oml)
+    node_disp = new_nodes - nodes.reshape((-1,3))
 
     # transfer aero peressures
     # unique_keys = set()
@@ -352,7 +357,9 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
     # for key, function in wing.quantities.oml.functions.items():
     #     print(key)
     # exit()
-    pressure_magnitudes = pressure_function.evaluate(oml_nodes_parametric)    
+    pressure_magnitudes = pressure_function.evaluate(oml_nodes_parametric)
+    pressure_magnitudes.add_name('nodal_pressure_magnitudes')
+    generator.add_output(pressure_magnitudes)
     pressure_normals = wing.quantities.oml.evaluate_normals(oml_nodes_parametric)
     oml_pressures = pressure_normals*csdl.expand(pressure_magnitudes, pressure_normals.shape, 'i->ij')
 
@@ -394,7 +401,10 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
 
     # fit displacement function
     oml_displacement_space:fs.FunctionSetSpace = wing.quantities.oml_displacement_space_2
-    oml_displacement_function = oml_displacement_space.fit_function_set(disp_extracted[oml_node_inds], oml_nodes_parametric)
+    oml_displacement_vals = disp_extracted[oml_node_inds]
+    oml_displacement_vals.add_name('nodal_displacement')
+    generator.add_output(oml_displacement_vals)
+    oml_displacement_function = oml_displacement_space.fit_function_set(oml_displacement_vals, oml_nodes_parametric)
 
     return oml_displacement_function, shell_outputs
 
@@ -500,7 +510,7 @@ define_analysis(caddee)
 csdl.save_optimization_variables()
 
 
-generator.generate(filename='struct_opt_geo_test_04', n_samples=10)
+generator.generate(filename='struct_opt_geo_test_05', n_samples=2)
 
 exit()
 

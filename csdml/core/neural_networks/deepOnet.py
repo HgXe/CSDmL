@@ -17,12 +17,18 @@ class DeepOnet(NeuralNetwork):
         self.bias = csdl.Variable(value=np.random.randn(self.output_dim))
         self.parameters = self.trunk.parameters + self.branch.parameters + [self.bias]
 
-    def forward(self, x, t=None):
+
+    def _forward(self, x):
+        x = x[:, :-self.trunk.input_dim]
+        t = x[:, -self.trunk.input_dim:]
+        return self.forward(x, t)
+
+    def forward(self, x, t):
         
-        # need this for it to work with the training loop
-        if t is None:
-            x = x[:, :-self.trunk.input_dim]
-            t = x[:, -self.trunk.input_dim:]
+        # # need this for it to work with the training loop
+        # if t is None:
+        #     x = x[:, :-self.trunk.input_dim]
+        #     t = x[:, -self.trunk.input_dim:]
 
         z = self.branch(x)
         y = self.trunk(t)

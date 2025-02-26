@@ -35,6 +35,9 @@ class NeuralNetwork():
     def forward(self, x):
         raise NotImplementedError('forward method must be implemented in subclass')
     
+    def _forward(self, x):
+        return self.forward(x)
+
     def set_design_variables(self):
         for parameter in self.parameters:
             parameter.set_as_design_variable()
@@ -57,7 +60,7 @@ class NeuralNetwork():
         self.set_design_variables()
 
         # run the training loop
-        y_pred = self.forward(X)
+        y_pred = self._forward(X)
 
         # compute the loss
         if self.loss_function == 'mse':
@@ -108,6 +111,14 @@ class NeuralNetwork():
         device : str, optional
             Device to use for training. The default is None.
 
+        Returns
+        -------
+        loss_history : list
+            List of training losses
+        test_loss_history : list
+            List of test losses
+        best_param_vals : list
+            List of best parameter values
         """
         
         # turn off the outer recorder
@@ -129,7 +140,7 @@ class NeuralNetwork():
         Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
 
         # run the training loop
-        y_pred = self.forward(X_var_batch)
+        y_pred = self._forward(X_var_batch)
 
         # compute the loss
         if self.loss_function == 'mse':
@@ -148,7 +159,7 @@ class NeuralNetwork():
             X_test, Y_test = test_data
             X_test_var = csdl.Variable(value=X_test)
             Y_test_var = csdl.Variable(value=Y_test)
-            y_pred = self.forward(X_test_var)
+            y_pred = self._forward(X_test_var)
             if self.loss_function == 'mse':
                 test_loss = csdl.norm((Y_test_var - y_pred))/X_test.shape[0]
             elif callable(self.loss_function):
@@ -191,8 +202,8 @@ class NeuralNetwork():
 
 
         end = time()
-        msg = "training time for {0} iterations = {1:.1f} seconds"
-        print(msg.format(num_batches, end-start))
+        msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"
+        print(msg.format(num_epochs, num_batches, end-start))
 
         if plot:
             # plot the loss history
