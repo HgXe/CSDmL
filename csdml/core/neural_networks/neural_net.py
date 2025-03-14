@@ -200,6 +200,9 @@ class NeuralNetwork():
                         best_test_loss = test_loss
                         best_params = net_params
 
+                if epoch == 0 and ibatch == 0:
+                    # remove jitting time
+                    start = time()
 
         end = time()
         msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"

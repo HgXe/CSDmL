@@ -50,6 +50,7 @@ def load_data(fnames, num_samples, group_names, group_shapes, normalization_keys
     if outlier_key is not None:
         # find indices of outliers
         m = 2.
+        print(np.max(arrays[outlier_key]), np.min(arrays[outlier_key]))
         data = np.max(np.abs(arrays[outlier_key]), axis=1)
         d = np.abs(data - np.median(data))
         mdev = np.median(d)
@@ -65,6 +66,7 @@ def load_data(fnames, num_samples, group_names, group_shapes, normalization_keys
     normalization_params = {}
     for key in normalization_keys:
         mean = np.mean(np.abs(arrays[key]))
+        print(np.max(arrays[key]), np.min(arrays[key]), mean)
         arrays[key] = arrays[key]/mean
         normalization_params[key] = {'mean':mean}
 
@@ -113,6 +115,15 @@ def load_params(fname, net:csdml.NeuralNetwork=None):
     if net is not None:
         net.set_param_values(param_vals)
     return param_vals
+
+
+
+
+    # plot an example from the test set
+    i = 0
+    x = X_test[i]
+    y = y_test[i]
+    y_pred = fcnn_net(x)
 
 class SemiLinearNet(csdml.NeuralNetwork):
     def __init__(self, 
@@ -198,7 +209,7 @@ class ReducedSLN(csdml.NeuralNetwork):
         x2 = x[:, self.nl_input_dim:]
         return self.forward(x1, x2)
 
-def train_semilinear(Cg, Cp, Cd, split_ind, net:csdml.NeuralNetwork, num_epochs, optimizer=optax.adam(0.001)):
+def train_semilinear(Cg, Cp, Cd, split_ind, net, num_epochs):
     X = np.hstack((Cg, Cp))
     y = Cd
 
@@ -211,8 +222,14 @@ def train_semilinear(Cg, Cp, Cd, split_ind, net:csdml.NeuralNetwork, num_epochs,
     # Train model
     epochs = num_epochs
     num_batches = 1
+    lr = 0.001
     device = jax.devices('gpu')[0]
     # device = jax.devices('cpu')[0]
+
+
+
+
+    optimizer = optax.adam(lr)
     loss_data = X_train, y_train
     test_data = X_test, y_test
     loss_history, test_loss_history, best_param_vals = net.train_jax_opt(optimizer=optimizer, 
@@ -227,16 +244,16 @@ rec = csdl.Recorder(inline=True)
 rec.start()
 
 do_training = False
-do_training_optuna = False
-num_epochs = 5000
-# hidden_dims = [512, 512, 512, 256]
-hidden_dims = [256, 256]
-
+num_epochs = 50000
+hidden_dims = [512, 128]
 
 do_visualization = True
 
 fnames = ['struct_opt_geo_with_nodes_01.hdf5', 'struct_opt_geo_with_nodes_02.hdf5', 'struct_opt_geo_with_nodes_03.hdf5', 'struct_opt_geo_with_nodes_04.hdf5']
-test_fraction = 0.2
+split_ind = 800*3
+
+# fnames = ['struct_opt_geo_with_nodes_01.hdf5']
+# split_ind = 600
 
 num_samples = 800
 group_names = {'displacement':'displacement_coefficients',
@@ -245,12 +262,10 @@ group_names = {'displacement':'displacement_coefficients',
 group_shapes = {'displacement':400*3, 'pressure':800, 'geometry':117*3}
 
 # Load dataset (& normalize)
-arrays, normalization_params = load_data(fnames, num_samples, group_names, group_shapes, normalization_keys=['displacement', 'pressure', 'geometry'], outlier_key='displacement')
+arrays, normalization_params = load_data(fnames, num_samples, group_names, group_shapes, normalization_keys=['displacement'], outlier_key='displacement')
 Cg = arrays['geometry']
 Cp = arrays['pressure']
 Cd = arrays['displacement']
-
-split_ind = int(Cg.shape[0]*(1-test_fraction))
 
 # net = csdml.FCNN(input_dim=Cg.shape[1] + Cp.shape[1],
 #                      hidden_dims=hidden_dims,
@@ -265,51 +280,36 @@ nl_net = SemiLinearNet(nl_input_dim=Cg.shape[1],
 
 rsl_net = ReducedSLN(nl_input_dim=Cg.shape[1],
                      l_input_dim=Cp.shape[1],
-                     l_reduction_dim=16,
-                     nl_reduction_dim=16,
+                     l_reduction_dim=10,
+                     nl_reduction_dim=10,
                      hidden_dims=hidden_dims,
                      output_dim=Cd.shape[1],
                      activation='tanh')
 
 if do_training:
-
-    schedule = optax.schedules.cosine_decay_schedule(3e-4, 5000, alpha=1e-6)
-
-    optimizer = optax.adam(schedule)
-
     # params, loss, test_loss = train_fcnn(Cg, Cp, Cd, split_ind, net, num_epochs)
-    params, loss, test_loss = train_semilinear(Cg, Cp, Cd, split_ind, rsl_net, num_epochs, optimizer=optimizer)
+    params, loss, test_loss = train_semilinear(Cg, Cp, Cd, split_ind, rsl_net, num_epochs)
 
-    save_params(params, 'params_rsl_10x10.pkl')
-
-if do_training_optuna:
-    import optuna
-
-    def objective(trial):
-        lr = trial.suggest_float('lr', 1e-8, 0.003)
-        optimizer = optax.adam(lr)
-        params, loss, test_loss = train_semilinear(Cg, Cp, Cd, split_ind, rsl_net, num_epochs, optimizer=optimizer)
-        return(min(test_loss))
-    
-    study = optuna.create_study()
-    study.optimize(objective, n_trials=100)
-    best_lr = study.best_params['lr']
-
-    print('best lr', best_lr)
-
+    save_params(params, 'params_01.pkl')
 
 if do_visualization:
-    net = rsl_net
 
-    load_params('params_rsl_16x16_s2_5.pkl', net)
+    load_params('params_rsl_10x10.pkl', rsl_net)
 
     # plot an example from the test set
-    i = -1223
+    i = -100
     Cg_i = Cg[split_ind + i]
     Cp_i = Cp[split_ind + i]
     Cd_i = Cd[split_ind + i]
     # X = np.hstack((Cg_i, Cp_i)).reshape(1, -1)
-    Cd_pred = net.forward(Cg_i.reshape(1,-1), Cp_i.reshape(1,-1)).flatten()
+    import time
+    start = time.time()
+    Cd_pred = rsl_net.forward(Cg_i.reshape(1,-1), Cp_i.reshape(1,-1)).flatten()
+    print('run 1 time', time.time()-start)
+    start = time.time()
+    Cd_pred = rsl_net.forward(Cg_i.reshape(1,-1), Cp_i.reshape(1,-1)).flatten()
+    print('run 2 time', time.time()-start)
+    # exit()
 
     # de-normalize
     # Cg_max = normalization_params['geometry']['max']
@@ -321,8 +321,7 @@ if do_visualization:
     # Cd_i = (Cd_i + 1) * (Cd_max - Cd_min) / 2 + Cd_min
     # Cd_pred = (Cd_pred + 1) * (Cd_max - Cd_min) / 2 + Cd_min
 
-    Cd_error = np.linalg.norm((Cd_i - Cd_pred.value)/Cd_i)
-    print('error:', Cd_error)
+    Cd_error = (Cd_i - Cd_pred)/Cd_i
 
 
     plotter = PlottingUtil()
@@ -333,7 +332,6 @@ if do_visualization:
 
 
     mesh = geo_function.plot_but_good(color=disp_function, show=True)
-    mesh = geo_function.plot_but_good(color=disp_pred_function, show=True)
     # import vedo
     # mesh.add_scalarbar()
     # plotter = vedo.Plotter()
