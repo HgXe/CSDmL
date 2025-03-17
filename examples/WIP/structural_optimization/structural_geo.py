@@ -13,10 +13,7 @@ from femo_alpha.fea.utils_dolfinx import readFEAMesh, reconstructFEAMesh
 from pathlib import Path
 
 # Settings
-couple = False
-optimize = True
-inline = False
-shell = False
+inline = True
 
 
 # Quantities
@@ -392,7 +389,8 @@ def run_shell(mesh_container, condition:cd.aircraft.conditions.CruiseCondition, 
                                shell_bc_func=clamped_boundary,
                                element_wise_material=True,
                                record=rec, # record=true doesn't work with 2 shell instances
-                               rho=4)
+                               rho=4,
+                               PENALTY_BC=False)
     shell_outputs = shell_model.evaluate(f_input, 
                                          element_thicknesses, E, nu, density,
                                          node_disp,
@@ -508,9 +506,9 @@ rec.inline = inline
 define_conditions(caddee)
 define_analysis(caddee)
 csdl.save_optimization_variables()
+exit()
 
-
-generator.generate(filename='struct_opt_geo_test_05', n_samples=2)
+generator.generate(filename='struct_opt_geo_test_07', n_samples=2)
 
 exit()
 

@@ -89,7 +89,7 @@ class Generator():
         offset = lower
         samples = samples * scaler + offset
 
-        print_interval = n_samples // 10
+        print_interval = max(n_samples // 10, 1)
         import time
 
         for n, sample in enumerate(samples):

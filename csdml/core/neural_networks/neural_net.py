@@ -209,7 +209,7 @@ class NeuralNetwork():
                     if test_loss < best_test_loss:
                         best_test_loss = test_loss
                         best_params = net_params
-                
+
                 if epoch == 0 and ibatch == 0:
                     # remove jitting time
                     start = time()
