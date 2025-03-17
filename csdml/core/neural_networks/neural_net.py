@@ -151,7 +151,7 @@ class NeuralNetwork():
 
         # compute the loss
         if self.loss_function == 'mse':
-            loss = csdl.norm((Y_var_batch - y_pred))**2/csdl.norm(Y_var_batch)**2
+            loss = csdl.sum((Y_var_batch - y_pred)**2)/csdl.sum(Y_var_batch**2)
         elif callable(self.loss_function):
             loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
         else:
@@ -168,7 +168,7 @@ class NeuralNetwork():
             Y_test_var = csdl.Variable(value=Y_test)
             y_pred = self._forward(X_test_var)
             if self.loss_function == 'mse':
-                test_loss = csdl.norm((Y_test_var - y_pred))**2/csdl.norm(Y_test_var)**2
+                test_loss = csdl.sum((Y_test_var - y_pred)**2)/csdl.sum(Y_test_var**2)
             elif callable(self.loss_function):
                 test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
@@ -233,7 +233,7 @@ class NeuralNetwork():
                 __=plot_fn(test_loss_history)
                 ax.legend(['train', 'test'])
             xlabel = ax.set_xlabel(r'${\rm step\ number}$')
-            ylabel = ax.set_ylabel(r'$\log_{10}{\rm loss}$')
+            ylabel = ax.set_ylabel(r'${\rm loss}$')
             title = ax.set_title(r'${\rm training\ history}$')
             plt.savefig('loss_history.png', dpi=300)
             plt.close()

@@ -60,13 +60,22 @@ class FCNN(NeuralNetwork):
     def init_weights(self):
         self.weights = []
         for i in range(len(self.layers) - 1):
-            weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]))
+            if self.activation[i] == 'tanh':
+                # Xavier initialization for tanh
+                weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]))
+            elif self.activation[i] == 'relu':
+                # He initialization for relu
+                weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]/2))
+            else:
+                weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]))
             self.weights.append(weights_i)
 
     def init_biases(self):
         self.biases = []
         for i in range(len(self.layers) - 1):
-            biases_i = csdl.Variable(value=np.random.randn(self.layers[i+1]))
+            # biases_i = csdl.Variable(value=np.random.randn(self.layers[i+1]))
+            # initialize biases to zero
+            biases_i = csdl.Variable(value=np.zeros(self.layers[i+1]))
             self.biases.append(biases_i)
 
     def forward(self, x:VariableLike) -> csdl.Variable:
