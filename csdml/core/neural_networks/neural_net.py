@@ -184,13 +184,15 @@ class NeuralNetwork():
         best_test_loss = np.inf
         best_params = net_params
         start = time()
+        print_interval = max(1, num_epochs // 10)
         for epoch in range(num_epochs):
+            # if epoch % print_interval == 0:
+            print_status(epoch, num_epochs, loss_history, test_loss_history, start)
+
             for ibatch in range(num_batches):
                 X_batch = X[ibatch*batch_size:(ibatch+1)*batch_size]
                 Y_batch = Y[ibatch*batch_size:(ibatch+1)*batch_size]
-
                 loss_data = X_batch, Y_batch
-                
                 loss, net_params, opt_state = train_step(ibatch, net_params, opt_state, loss_data)
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
@@ -206,6 +208,7 @@ class NeuralNetwork():
 
         end = time()
         msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"
+        print()
         print(msg.format(num_epochs, num_batches, end-start))
 
         if plot:
@@ -236,6 +239,30 @@ class NeuralNetwork():
             best_param_vals = [np.array(x) for x in best_params]
             return loss_history, test_loss_history, best_param_vals
         return loss_history, test_loss_history
+
+def print_status(epoch, num_epochs, loss_history, test_loss_history, start):
+    current_time = time()
+    elapsed_time = current_time - start
+    remaining_time = (elapsed_time / epoch * (num_epochs - epoch)) if epoch > 0 else 0
+    training_loss = loss_history[-1] if loss_history else "N/A"
+    test_loss = test_loss_history[-1] if test_loss_history else "N/A"
+
+    # Construct the status message
+    status_message = (
+        f"Epoch {epoch}/{num_epochs} | "
+        f"Elapsed: {elapsed_time:.1f}s | "
+        f"Remaining: {remaining_time:.1f}s | "
+        f"Train Loss: {training_loss} | "
+        f"Test Loss: {test_loss}"
+    )
+
+    if epoch == 0:
+        # Print normally for the first call
+        print(status_message)
+    else:
+        # Overwrite the previous line
+        print(f"\r{status_message}\033[K", end="")
+
 
 def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
     '''
