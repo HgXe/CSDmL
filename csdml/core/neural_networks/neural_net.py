@@ -46,6 +46,9 @@ class NeuralNetwork():
         for parameter, value in zip(self.parameters, values):
             parameter.value = value
     
+    def get_param_values(self):
+        return [parameter.value for parameter in self.parameters]
+
     def __call__(self, x):
         return self.forward(x)
 
@@ -90,7 +93,8 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, num_batches=10, num_epochs=100, test_data=None, plot=True, device=None):
+    def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
+                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -120,6 +124,8 @@ class NeuralNetwork():
         best_param_vals : list
             List of best parameter values
         """
+        # get current values of parameters
+        current_param_vals = self.get_param_values()
         
         # turn off the outer recorder
         rec_outer = csdl.get_current_recorder()
@@ -130,6 +136,7 @@ class NeuralNetwork():
         rec_inner.start()
 
         self.init_parameters()
+        self.set_param_values(current_param_vals)
         self.set_design_variables()
 
         # create csdl variables for the loss data
@@ -144,7 +151,7 @@ class NeuralNetwork():
 
         # compute the loss
         if self.loss_function == 'mse':
-            loss = csdl.norm((Y_var_batch - y_pred))/batch_size
+            loss = csdl.norm((Y_var_batch - y_pred))**2/csdl.norm(Y_var_batch)**2
         elif callable(self.loss_function):
             loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
         else:
@@ -161,7 +168,7 @@ class NeuralNetwork():
             Y_test_var = csdl.Variable(value=Y_test)
             y_pred = self._forward(X_test_var)
             if self.loss_function == 'mse':
-                test_loss = csdl.norm((Y_test_var - y_pred))/X_test.shape[0]
+                test_loss = csdl.norm((Y_test_var - y_pred))**2/csdl.norm(Y_test_var)**2
             elif callable(self.loss_function):
                 test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
@@ -215,14 +222,21 @@ class NeuralNetwork():
             # plot the loss history
             import matplotlib.pyplot as plt
             fig, ax = plt.subplots(1, 1)
-            __=ax.plot(np.log10(loss_history))
+
+            if log_plot:
+                plot_fn = ax.semilogy
+            else:
+                plot_fn = ax.plot
+
+            __=plot_fn(loss_history)
             if test_data is not None:
-                __=ax.plot(np.log10(test_loss_history))
+                __=plot_fn(test_loss_history)
                 ax.legend(['train', 'test'])
             xlabel = ax.set_xlabel(r'${\rm step\ number}$')
             ylabel = ax.set_ylabel(r'$\log_{10}{\rm loss}$')
             title = ax.set_title(r'${\rm training\ history}$')
-            plt.show()
+            plt.savefig('loss_history.png', dpi=300)
+            plt.close()
         
         # extract values of the design variables
         param_vals = [np.array(x) for x in net_params]

@@ -3,7 +3,7 @@
 # This script installs stuff for training the nets & visualizations.
 # It assumes that conda is installed and accessible from your PATH.
 
-# Usage: ./install.bash [env_name]
+# Usage: ./install_train.bash [env_name]
 # If no argument is provided, the default environment name "train" is used.
 ENV_NAME="${1:-train}"
 
@@ -55,7 +55,7 @@ pip install git+https://github.com/LSDOlab/lsdo_function_spaces.git@patch_parame
 
 # 7. Install jax using pip
 echo "Installing jax..."
-pip install -U jax
+pip install -U "jax[cuda12]"
 
 # 8. Install optax using pip
 echo "Installing optax..."
