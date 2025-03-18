@@ -94,7 +94,7 @@ class NeuralNetwork():
         self.set_param_values(param_vals)
         
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
-                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None):
+                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, trial=None):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -124,6 +124,9 @@ class NeuralNetwork():
         best_param_vals : list
             List of best parameter values
         """
+        if trial is not None:
+            import optuna
+        
         # get current values of parameters
         current_param_vals = self.get_param_values()
         
@@ -204,7 +207,8 @@ class NeuralNetwork():
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
                     test_loss = jax_test_fn(*net_params)[0]
-                    test_loss_history.append(float(test_loss[0]))
+                    test_loss = float(test_loss[0])
+                    test_loss_history.append(test_loss)
                     if test_loss < best_test_loss:
                         best_test_loss = test_loss
                         best_params = net_params
@@ -212,7 +216,13 @@ class NeuralNetwork():
                 if epoch == 0 and ibatch == 0:
                     # remove jitting time
                     start = time()
-
+            
+            # report the best test loss to optuna
+            if trial is not None and test_data is not None:
+                trial.report(best_test_loss, epoch)
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+                
         end = time()
         msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"
         print()
