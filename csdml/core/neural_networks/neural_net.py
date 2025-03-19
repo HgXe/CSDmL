@@ -94,7 +94,8 @@ class NeuralNetwork():
         self.set_param_values(param_vals)
         
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
-                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, trial=None):
+                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
+                      trial=None, patience=None):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -195,6 +196,7 @@ class NeuralNetwork():
         best_params = net_params
         start = time()
         print_interval = max(1, num_epochs // 10)
+        wait = 0
         for epoch in range(num_epochs):
             # if epoch % print_interval == 0:
             print_status(epoch, num_epochs, loss_history, test_loss_history, start)
@@ -212,6 +214,12 @@ class NeuralNetwork():
                     if test_loss < best_test_loss:
                         best_test_loss = test_loss
                         best_params = net_params
+                        wait = 0
+                    else:
+                        wait += 1
+                        if patience is not None and wait > patience * num_batches:
+                            print(f'Early stopping at epoch {epoch}')
+                            break
 
                 if epoch == 0 and ibatch == 0:
                     # remove jitting time
