@@ -200,6 +200,7 @@ class NeuralNetwork():
         for epoch in range(num_epochs):
             # if epoch % print_interval == 0:
             print_status(epoch, num_epochs, loss_history, test_loss_history, start)
+            decreased = False
 
             for ibatch in range(num_batches):
                 X_batch = X[ibatch*batch_size:(ibatch+1)*batch_size]
@@ -214,16 +215,21 @@ class NeuralNetwork():
                     if test_loss < best_test_loss:
                         best_test_loss = test_loss
                         best_params = net_params
-                        wait = 0
-                    else:
-                        wait += 1
-                        if patience is not None and wait > patience * num_batches:
-                            print(f'Early stopping at epoch {epoch}')
-                            break
-
+                        decreased = True
+            
                 if epoch == 0 and ibatch == 0:
                     # remove jitting time
                     start = time()
+
+            if test_data is not None:
+                if decreased:
+                    wait = 0
+                else:
+                    wait += 1
+                    if patience is not None and wait > patience * num_batches:
+                        print()
+                        print(f'Early stopping at epoch {epoch}')
+                        break
             
             # report the best test loss to optuna
             if trial is not None and test_data is not None:
@@ -234,7 +240,7 @@ class NeuralNetwork():
         end = time()
         msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"
         print()
-        print(msg.format(num_epochs, num_batches, end-start))
+        print(msg.format(epoch+1, num_batches, end-start))
 
         if plot:
             # plot the loss history
@@ -352,6 +358,11 @@ def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation"):
         loss = outputs[0]
         grads = [out.reshape(param.shape) for out, param in zip(outputs[1:], net_params)]
 
+        # value_fn = lambda x: jax_fn(*loss_data, *x)[0][0]
+
+        # updates, opt_state = optimizer.update(grads, opt_state, net_params,
+        #                                       value=loss[0], grad=grads, value_fn=value_fn)
+        
         updates, opt_state = optimizer.update(grads, opt_state, net_params)
         net_params = optax.apply_updates(net_params, updates)
 
