@@ -1,6 +1,6 @@
 import csdl_alpha as csdl
 import numpy as np
-from csdml.core.activation_functions import softplus, parametric_relu, relu_approximate
+from csdml.core.activation_functions import softplus, parametric_relu, relu_approximate, dropout
 from csdml.core.neural_networks.neural_net import NeuralNetwork
 from typing import Union, Callable
 from csdl_alpha.utils.typing import VariableLike
@@ -10,7 +10,9 @@ class FCNN(NeuralNetwork):
     def __init__(self, 
                  input_dim:int, hidden_dims:list[int], output_dim:int, 
                  activation:Union[Union[str, Callable], list[Union[str, Callable]]] = 'approx_relu', 
-                 loss_function:Union[str, Callable] = 'mse'):
+                 loss_function:Union[str, Callable] = 'mse',
+                 dropout_rate:Union[float, list[float]] = 0.0,
+                 training:bool = True):
         """
         Initialize a Fully Connected Neural Network (FCNN).
 
@@ -32,20 +34,46 @@ class FCNN(NeuralNetwork):
             The loss function to use. Can be 'mse' for mean squared error or a custom 
             callable function with signature loss(self, x_in, y_true, y_pred).  
             Default is 'mse'.
+        dropout_rate : float or list[float], optional
+            Dropout rate(s) to apply. Can be a single rate applied to all hidden layers,
+            or a list of rates for each layer. Dropout is not applied to the output layer.
+            Default is 0.0 (no dropout).
+        training : bool, optional
+            Whether the network is in training mode. When False, dropout is disabled.
+            Default is True.
         """
 
 
         self.input_dim = input_dim
         self.hidden_dims = hidden_dims
         self.output_dim = output_dim
+        self.training = training
+        
         if isinstance(activation, list):
             self.activation = activation
         else:
             self.activation = [activation for _ in range(len(hidden_dims) + 1)]
+            
+        if isinstance(dropout_rate, list):
+            self.dropout_rate = dropout_rate
+        else:
+            # Apply dropout to hidden layers only, not to output layer
+            self.dropout_rate = [dropout_rate for _ in range(len(hidden_dims))] + [0.0]
+            
         self.layers = []
         self.init_layers()
         self.init_parameters()
         super().__init__(loss_function, self.weights + self.biases)
+
+    def set_training_mode(self, training: bool):
+        """Set the training mode for the network.
+        
+        Parameters
+        ----------
+        training : bool
+            Whether the network should be in training mode.
+        """
+        self.training = training
 
     def init_parameters(self):
         self.init_weights()
@@ -60,10 +88,10 @@ class FCNN(NeuralNetwork):
     def init_weights(self):
         self.weights = []
         for i in range(len(self.layers) - 1):
-            if self.activation[i] == 'tanh':
+            if self.activation[i] == 'tanh' or self.activation[i] == 'linear':
                 # Xavier initialization for tanh
                 weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]))
-            elif self.activation[i] == 'relu':
+            elif self.activation[i] == 'relu' or self.activation[i] == 'approx_relu':
                 # He initialization for relu
                 weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]/2))
             else:
@@ -114,6 +142,12 @@ class FCNN(NeuralNetwork):
                 x = activation(x)
             else:
                 raise ValueError(f'Invalid activation function for layer {i}')
+            
+            # Apply dropout after activation (except for output layer)
+            if i < len(self.layers) - 2:  # Not the output layer
+                dropout_rate = self.dropout_rate[i] if i < len(self.dropout_rate) else 0.0
+                if dropout_rate > 0.0:
+                    x = dropout(x, rate=dropout_rate, training=self.training)
         return x
 
 def test_jax_opt():

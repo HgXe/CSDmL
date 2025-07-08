@@ -2,6 +2,7 @@ import csdl_alpha as csdl
 import numpy as np
 from csdl_alpha.backends.jax.graph_to_jax import create_jax_function
 import jax.numpy as jnp
+import jax
 from time import time
 from typing import Union
 import warnings
@@ -48,6 +49,22 @@ class NeuralNetwork():
     
     def get_param_values(self):
         return [parameter.value for parameter in self.parameters]
+    
+    def set_training_mode(self, training: bool = True):
+        """
+        Set the training mode for the neural network.
+        
+        This is a base implementation that does nothing by default.
+        Subclasses can override this method to implement training-specific
+        behavior (e.g., enabling/disabling dropout).
+        
+        Parameters
+        ----------
+        training : bool, optional
+            Whether to set the network to training mode (True) or inference mode (False).
+            Default is True.
+        """
+        pass
 
     def __call__(self, x):
         return self.forward(x)
@@ -67,7 +84,8 @@ class NeuralNetwork():
 
         # compute the loss
         if self.loss_function == 'mse':
-            loss = csdl.norm((y - y_pred))
+            n = np.prod(y.shape)
+            loss = csdl.norm((y - y_pred))/n
         elif callable(self.loss_function):
             loss = self.loss_function(y, y_pred)
         else:
@@ -95,7 +113,7 @@ class NeuralNetwork():
         
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
                       num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
-                      trial=None, patience=None):
+                      trial=None, patience=None, ema=None, permute=True):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -128,6 +146,9 @@ class NeuralNetwork():
         if trial is not None:
             import optuna
         
+        # Set training mode
+        self.set_training_mode(training=True)
+        
         # get current values of parameters
         current_param_vals = self.get_param_values()
         
@@ -145,6 +166,8 @@ class NeuralNetwork():
 
         # create csdl variables for the loss data
         X, Y = loss_data
+        X_device = jnp.array(X)
+        Y_device = jnp.array(Y)
         batch_size = X.shape[0] // num_batches
 
         X_var_batch = csdl.Variable(shape=X[:batch_size].shape, value=0)
@@ -155,7 +178,7 @@ class NeuralNetwork():
 
         # compute the loss
         if self.loss_function == 'mse':
-            loss = csdl.sum((Y_var_batch - y_pred)**2)/csdl.sum(Y_var_batch**2)
+            loss = csdl.sum((Y_var_batch - y_pred)**2)/np.prod(Y_var_batch.shape)
         elif callable(self.loss_function):
             loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
         else:
@@ -172,7 +195,7 @@ class NeuralNetwork():
             Y_test_var = csdl.Variable(value=Y_test)
             y_pred = self._forward(X_test_var)
             if self.loss_function == 'mse':
-                test_loss = csdl.sum((Y_test_var - y_pred)**2)/csdl.sum(Y_test_var**2)
+                test_loss = csdl.sum((Y_test_var - y_pred)**2)/np.prod(Y_test_var.shape)
             elif callable(self.loss_function):
                 test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
@@ -181,13 +204,27 @@ class NeuralNetwork():
         net_params = [jnp.array(dv.value) for dv in dvs]
         
         if isinstance(optimizer, optax.GradientTransformation):
-            train_step = generate_optax_step(X_var_batch, Y_var_batch, optimizer)
+            train_step_base = generate_optax_step(X_var_batch, Y_var_batch, optimizer, debug=False)
             opt_state = optimizer.init(net_params)
         else:
             opt_init, opt_update, get_params = optimizer
-            train_step = generate_jax_opt_step(X_var_batch, Y_var_batch, opt_update, get_params)
+            train_step_base = generate_jax_opt_step(X_var_batch, Y_var_batch, opt_update, get_params)
             opt_state = opt_init(net_params)
-        train_step = jjit(train_step, device=device)
+        
+        if ema is not None:
+            def train_step_ema(step_i, net_params, opt_state, ema_state, loss_data):
+                loss, net_params, opt_state = train_step_base(step_i, net_params, opt_state, loss_data)
+                net_params, ema_state = ema.update(net_params, ema_state)
+                return loss, net_params, opt_state, ema_state
+                
+            train_step = jjit(train_step_ema, device=device)
+        else:
+            train_step = jjit(train_step_base, device=device)
+
+        # initialize ema
+        if ema is not None:
+            ema_state = ema.init(net_params)
+
 
         # run optimization loop
         loss_history = []
@@ -196,17 +233,30 @@ class NeuralNetwork():
         best_params = net_params
         start = time()
         print_interval = max(1, num_epochs // 10)
+        np_rng = np.random.default_rng(seed=42)
         wait = 0
         for epoch in range(num_epochs):
-            # if epoch % print_interval == 0:
-            print_status(epoch, num_epochs, loss_history, test_loss_history, start)
+            perm = np_rng.permutation(X.shape[0])
             decreased = False
 
             for ibatch in range(num_batches):
-                X_batch = X[ibatch*batch_size:(ibatch+1)*batch_size]
-                Y_batch = Y[ibatch*batch_size:(ibatch+1)*batch_size]
+                lo = ibatch * batch_size
+                hi = (ibatch + 1) * batch_size
+                if permute:
+                    idx = perm[lo:hi]
+                else:
+                    idx = slice(lo, hi)
+                X_batch = X_device[idx]
+                Y_batch = Y_device[idx]
+
+                # X_batch = X[ibatch*batch_size:(ibatch+1)*batch_size]
+                # Y_batch = Y[ibatch*batch_size:(ibatch+1)*batch_size]
                 loss_data = X_batch, Y_batch
-                loss, net_params, opt_state = train_step(ibatch, net_params, opt_state, loss_data)
+                if ema is not None:
+                    loss, net_params, opt_state, ema_state = train_step(epoch*num_batches + ibatch, net_params, opt_state, ema_state, loss_data)
+                else:
+                    loss, net_params, opt_state = train_step(ibatch+num_batches*epoch, net_params, opt_state, loss_data)
+
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
                     test_loss = jax_test_fn(*net_params)[0]
@@ -216,7 +266,9 @@ class NeuralNetwork():
                         best_test_loss = test_loss
                         best_params = net_params
                         decreased = True
-            
+
+                print_status(epoch, num_epochs, ibatch+1, num_batches, loss_history, test_loss_history, start)
+
                 if epoch == 0 and ibatch == 0:
                     # remove jitting time
                     start = time()
@@ -265,6 +317,16 @@ class NeuralNetwork():
         # extract values of the design variables
         param_vals = [np.array(x) for x in net_params]
 
+        for dv, val in zip(dvs, param_vals):
+            dv.value = val
+
+        param_vals = []
+        for parameter in self.parameters:
+            if isinstance(parameter, csdl.Variable):
+                param_vals.append(parameter.value)
+            else:
+                param_vals.append(parameter)
+
         # switch back to the outer recorder
         rec_inner.stop()
         rec_outer.start()
@@ -272,34 +334,57 @@ class NeuralNetwork():
         # create new parameters and set the values
         self.init_parameters()
         self.set_param_values(param_vals)
+        
+        # Restore inference mode after training
+        self.set_training_mode(training=False)
 
         if test_data is not None:
             best_param_vals = [np.array(x) for x in best_params]
             return loss_history, test_loss_history, best_param_vals
         return loss_history, test_loss_history
 
-def print_status(epoch, num_epochs, loss_history, test_loss_history, start):
+def print_status(epoch, num_epochs, step, num_steps, loss_history, test_loss_history, start):
+    """
+    Print a one-line status message at each batch step.
+    """
     current_time = time()
     elapsed_time = current_time - start
-    remaining_time = (elapsed_time / epoch * (num_epochs - epoch)) if epoch > 0 else 0
-    training_loss = loss_history[-1] if loss_history else "N/A"
-    test_loss = test_loss_history[-1] if test_loss_history else "N/A"
+    total_steps_done = epoch * num_steps + step
+    total_steps = num_epochs * num_steps
+    remaining_time = (elapsed_time / total_steps_done * (total_steps - total_steps_done)) if total_steps_done > 0 else 0.0
 
-    # Construct the status message
-    status_message = (
-        f"Epoch {epoch}/{num_epochs} | "
-        f"Elapsed: {elapsed_time:.1f}s | "
-        f"Remaining: {remaining_time:.1f}s | "
-        f"Train Loss: {training_loss} | "
-        f"Test Loss: {test_loss}"
-    )
+    train_loss = loss_history[-1] if loss_history else "N/A"
+    test_loss  = test_loss_history[-1] if test_loss_history else "N/A"
 
-    if epoch == 0:
-        # Print normally for the first call
-        print(status_message)
+    # --- changed code starts here ---
+    # format numeric losses with up to 4 significant digits (scientific if needed)
+    if isinstance(train_loss, (int, float)):
+        train_loss_str = f"{train_loss:.4g}"
     else:
-        # Overwrite the previous line
-        print(f"\r{status_message}\033[K", end="")
+        train_loss_str = str(train_loss)
+    if isinstance(test_loss, (int, float)):
+        test_loss_str = f"{test_loss:.4g}"
+    else:
+        test_loss_str = str(test_loss)
+
+    # fixed width for step to match num_steps digits
+    step_width = len(str(num_steps))
+    # --- changed code ends here ---
+
+    msg = (
+        f"Epoch {epoch+1}/{num_epochs} "
+        f"Step {step:>{step_width}}/{num_steps} | "
+        f"Elapsed: {elapsed_time:.1f}s | "
+        f"Remain: {remaining_time:.1f}s | "
+        f"Train Loss: {train_loss_str} | "
+        f"Test Loss: {test_loss_str}"
+    )
+    if total_steps_done == 1:
+        # first print, no overwrite
+        print(msg)
+    else:
+        # overwrite previous line
+        print(f"\r{msg}\033[K", end="")
 
 
 def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
@@ -334,7 +419,7 @@ def generate_jax_opt_step(X_var, Y_var, opt_update, get_params):
 
     return train_step
 
-def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation"):
+def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation", debug=False):
     '''
     
     Parameters
@@ -357,6 +442,11 @@ def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation"):
         outputs = jax_fn(*loss_data, *net_params)
         loss = outputs[0]
         grads = [out.reshape(param.shape) for out, param in zip(outputs[1:], net_params)]
+
+        if debug:
+            gnorm = optax.global_norm(grads)
+            jax.debug.print("batch {b}: loss={l}, |g|={g}",
+                            b=step_i, l=loss[0], g=gnorm)
 
         # value_fn = lambda x: jax_fn(*loss_data, *x)[0][0]
 

@@ -1,0 +1,27 @@
+#!/bin/bash
+
+ 
+
+#SBATCH --partition=hotel
+
+#SBATCH --nodes=1
+
+#SBATCH --ntasks-per-node=1
+
+#SBATCH --time=00:10:00
+
+#SBATCH --account=your_account
+
+#SBATCH --qos=hotel
+
+ 
+
+# Load Python module (adjust as necessary for your setup)
+
+module load python/3.8
+
+ 
+
+# Execute simple Python Hello World script
+
+python -c "print('Hello, World!')"
