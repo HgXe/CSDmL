@@ -49,9 +49,9 @@ class Generator():
         pass
 
 
-    def _build_generator_function(self, backend='jax'):
+    def _build_generator_function(self, backend='jax', device='cpu'):
         if backend == 'jax':
-            interface = csdl.jax.create_jax_interface(inputs=list(self.inputs.keys()), outputs=self.outputs, graph=self.recorder.active_graph)
+            interface = csdl.jax.create_jax_interface(inputs=list(self.inputs.keys()), outputs=self.outputs, graph=self.recorder.active_graph, device=device)
         elif backend == 'inline':
             generator_graph, _, _ = self.recorder.active_graph.extract_subgraph(self.inputs.keys(), self.outputs)
             def interface(input_dict):
@@ -64,8 +64,8 @@ class Generator():
         
         return interface
 
-    def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None, time_samples:bool=False):
-        function = self._build_generator_function()
+    def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None, time_samples:bool=False, backend='jax', device='cpu'):
+        function = self._build_generator_function(backend=backend, device=device)
         # in future, use the estimated input probability distribution to sample the input variables
         # for now we will just sample the inputs via LHS
         dims = []

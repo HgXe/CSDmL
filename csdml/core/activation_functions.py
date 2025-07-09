@@ -72,51 +72,6 @@ class ParametricReLUDerivative(ElementwiseOperation):
     def evaluate_vjp(self, cotangents, x, dprelu_u):
         if cotangents.check(x):
             cotangents.accumulate(x, 0*cotangents[dprelu_u])
-        
-
-class Dropout(ElementwiseOperation):
-    def __init__(self, x: csdl.Variable, rate: float = 0.0, training: bool = True, seed: int = None):
-        super().__init__(x)
-        self.name = 'dropout'
-        self.rate = rate
-        self.training = training
-        self.seed = seed
-
-    def compute_inline(self, x):
-        if not self.training or self.rate == 0.0:
-            return x
-        
-        # Generate random mask
-        if self.seed is not None:
-            np.random.seed(self.seed)
-        keep_prob = 1.0 - self.rate
-        mask = np.random.binomial(1, keep_prob, size=x.shape) / keep_prob
-        return x * mask
-
-    def compute_jax(self, x):
-        if not self.training or self.rate == 0.0:
-            return x
-            
-        import jax
-        import jax.numpy as jnp
-        from jax import random
-        
-        # Use a fixed key for reproducibility during training
-        key = random.PRNGKey(self.seed if self.seed is not None else 42)
-        keep_prob = 1.0 - self.rate
-        mask = random.bernoulli(key, keep_prob, shape=x.shape) / keep_prob
-        return x * mask
-
-    def evaluate_vjp(self, cotangents, x, dropout_x):
-        if cotangents.check(x):
-            if not self.training or self.rate == 0.0:
-                cotangents.accumulate(x, cotangents[dropout_x])
-            else:
-                # During training, the gradient also gets multiplied by the same mask
-                # For simplicity, we'll pass through the gradient as-is
-                # In practice, the exact same mask should be used, but this is complex to implement
-                cotangents.accumulate(x, cotangents[dropout_x])
-
 
 def softplus(x:VariableLike, beta:float=1.0)->csdl.Variable:
     """Softplus activation function.
@@ -214,7 +169,7 @@ def d_parametric_relu(x:VariableLike, alpha:float=0.0)->csdl.Variable:
 
 
 
-def dropout(x: VariableLike, rate: float = 0.0, training: bool = True, seed: int = None) -> csdl.Variable:
+def dropout(x: VariableLike, rate: VariableLike, training: bool = True) -> csdl.Variable:
     """Dropout regularization function.
     
     During training, randomly sets input units to 0 with a frequency of `rate` at each 
@@ -250,7 +205,16 @@ def dropout(x: VariableLike, rate: float = 0.0, training: bool = True, seed: int
     >>> y_eval = dropout(x, rate=0.5, training=False)
     """
     x = validate_and_variablize(x)
-    return Dropout(x, rate, training, seed).finalize_and_return_outputs()
+    rate = validate_and_variablize(rate)
+
+    if not training:
+        # If not training or rate is 0, return input unchanged
+        return x
+    
+    # During training, apply dropout
+    mask = csdl.bernoulli(p=rate, shape=x.shape)
+
+    return x * mask / (1 - rate)
 
 
 def test_softplus():

@@ -113,7 +113,7 @@ class NeuralNetwork():
         
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
                       num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
-                      trial=None, patience=None, ema=None, permute=True):
+                      trial=None, patience=None, ema=None, permute=True, prng_seed=42):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -187,7 +187,6 @@ class NeuralNetwork():
 
         dvs = [var for var in rec_inner.design_variables.keys()]
 
-
         # build test function
         if test_data is not None:
             X_test, Y_test = test_data
@@ -212,8 +211,8 @@ class NeuralNetwork():
             opt_state = opt_init(net_params)
         
         if ema is not None:
-            def train_step_ema(step_i, net_params, opt_state, ema_state, loss_data):
-                loss, net_params, opt_state = train_step_base(step_i, net_params, opt_state, loss_data)
+            def train_step_ema(step_i, net_params, opt_state, ema_state, loss_data, prng_key=None):
+                loss, net_params, opt_state = train_step_base(step_i, net_params, opt_state, loss_data, prng_key=prng_key)
                 net_params, ema_state = ema.update(net_params, ema_state)
                 return loss, net_params, opt_state, ema_state
                 
@@ -225,6 +224,8 @@ class NeuralNetwork():
         if ema is not None:
             ema_state = ema.init(net_params)
 
+        # initialize random number generator
+        prng_key = jax.random.PRNGKey(prng_seed)
 
         # run optimization loop
         loss_history = []
@@ -249,13 +250,16 @@ class NeuralNetwork():
                 X_batch = X_device[idx]
                 Y_batch = Y_device[idx]
 
+                # split prng key for each batch (eg for dropout)
+                prng_key, subkey = jax.random.split(prng_key)
+
                 # X_batch = X[ibatch*batch_size:(ibatch+1)*batch_size]
                 # Y_batch = Y[ibatch*batch_size:(ibatch+1)*batch_size]
                 loss_data = X_batch, Y_batch
                 if ema is not None:
-                    loss, net_params, opt_state, ema_state = train_step(epoch*num_batches + ibatch, net_params, opt_state, ema_state, loss_data)
+                    loss, net_params, opt_state, ema_state = train_step(epoch*num_batches + ibatch, net_params, opt_state, ema_state, loss_data, prng_key=subkey)
                 else:
-                    loss, net_params, opt_state = train_step(ibatch+num_batches*epoch, net_params, opt_state, loss_data)
+                    loss, net_params, opt_state = train_step(ibatch+num_batches*epoch, net_params, opt_state, loss_data, prng_key=subkey)
 
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
@@ -437,9 +441,9 @@ def generate_optax_step(X_var, Y_var, optimizer:"GradientTransformation", debug=
 
     jax_fn = create_jax_function(rec.active_graph, outputs=[obj]+grads, inputs=[X_var, Y_var] + dvs)
 
-    def train_step(step_i, net_params, opt_state, loss_data):
+    def train_step(step_i, net_params, opt_state, loss_data, prng_key=None):
 
-        outputs = jax_fn(*loss_data, *net_params)
+        outputs = jax_fn(*loss_data, *net_params, prng_key=prng_key)
         loss = outputs[0]
         grads = [out.reshape(param.shape) for out, param in zip(outputs[1:], net_params)]
 

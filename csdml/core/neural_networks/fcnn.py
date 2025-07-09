@@ -50,15 +50,21 @@ class FCNN(NeuralNetwork):
         self.training = training
         
         if isinstance(activation, list):
+            # Ensure activation has the same length as layers
+            if len(activation) != len(hidden_dims) + 1:
+                raise ValueError("If activation is a list, it must have the same length as hidden_dims + 1 (for output layer).")
             self.activation = activation
         else:
             self.activation = [activation for _ in range(len(hidden_dims) + 1)]
             
         if isinstance(dropout_rate, list):
+            # Ensure dropout_rate has the same length as hidden_dims
+            if len(dropout_rate) != len(hidden_dims):
+                raise ValueError("If dropout_rate is a list, it must have the same length as hidden_dims.")
             self.dropout_rate = dropout_rate
         else:
             # Apply dropout to hidden layers only, not to output layer
-            self.dropout_rate = [dropout_rate for _ in range(len(hidden_dims))] + [0.0]
+            self.dropout_rate = [dropout_rate for _ in range(len(hidden_dims))]
             
         self.layers = []
         self.init_layers()
@@ -145,9 +151,7 @@ class FCNN(NeuralNetwork):
             
             # Apply dropout after activation (except for output layer)
             if i < len(self.layers) - 2:  # Not the output layer
-                dropout_rate = self.dropout_rate[i] if i < len(self.dropout_rate) else 0.0
-                if dropout_rate > 0.0:
-                    x = dropout(x, rate=dropout_rate, training=self.training)
+                x = dropout(x, rate=self.dropout_rate[i], training=self.training)
         return x
 
 def test_jax_opt():
