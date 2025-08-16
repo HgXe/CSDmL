@@ -64,37 +64,82 @@ class Generator():
         
         return interface
 
-    def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None, time_samples:bool=False, backend='jax', device='cpu'):
+    def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None,
+                 time_samples:bool=False, backend='jax', device='cpu',
+                 batch_size:int=None, start:int=0, seed:int=0,
+                 resume_state_file:str=None, save_state_file:str=None):
+        """
+        Generate samples using LatinHypercube. Supports batching/resuming.
+
+        - n_samples: total number of samples you intend to produce overall (used to compute defaults).
+        - batch_size: number of samples to produce in this call. If None, produce all remaining.
+        - start: index to start sampling from (0-based). Ignored if resume_state_file provided.
+        - seed: RNG seed for reproducible sequences.
+        - resume_state_file: if provided and exists, loads {'seed', 'next_index'} and overrides start/seed.
+        - save_state_file: if provided, saves {'seed', 'next_index'} after this batch so you can resume later.
+        """
+        import os
+        import numpy as _np
+
+        # resume state if requested
+        if resume_state_file is not None and os.path.exists(resume_state_file):
+            st = _np.load(resume_state_file)
+            seed = int(st['seed'])
+            start = int(st['next_index'])
+
         function = self._build_generator_function(backend=backend, device=device)
         # in future, use the estimated input probability distribution to sample the input variables
         # for now we will just sample the inputs via LHS
         dims = []
         for input, bounds in self.inputs.items():
-            dims.append(np.prod(input.shape))
+            dims.append(int(_np.prod(input.shape)))
             # apply default bounds
             if bounds[0] is None:
-                bounds[0] = np.ones(input.shape) * 1
+                bounds[0] = _np.ones(input.shape) * 1
             if bounds[1] is None:
-                bounds[1] = np.ones(input.shape) * 0
+                bounds[1] = _np.ones(input.shape) * 0
 
-        upper = np.hstack([self.inputs[input][0].flatten() for input in self.inputs]).flatten()
-        lower = np.hstack([self.inputs[input][1].flatten() for input in self.inputs]).flatten()
+        total_dim = sum(dims)
+
+        upper = _np.hstack([self.inputs[input][0].flatten() for input in self.inputs]).flatten()
+        lower = _np.hstack([self.inputs[input][1].flatten() for input in self.inputs]).flatten()
 
         if n_samples is None:
-            n_samples = samples_per_dim ** sum(dims)
+            n_samples = samples_per_dim ** total_dim
+
+        # determine how many to draw in this call
+        if batch_size is None:
+            batch_size = n_samples - start
         else:
-            n_samples = n_samples
-        samples = qmc.LatinHypercube(d=sum(dims)).random(n_samples)
+            batch_size = min(batch_size, max(n_samples - start, 0))
+
+        if batch_size <= 0:
+            print('No samples to generate (start >= n_samples).')
+            return
+
+        # build sampler with reproducible RNG
+        rng = _np.random.default_rng(seed)
+        sampler = qmc.LatinHypercube(d=total_dim, seed=rng)
+
+        # advance to start index
+        if start > 0:
+            sampler.fast_forward(start)
+
+        # draw batch
+        samples = sampler.random(batch_size)
+
+        # scale samples into bounds
         scaler = upper - lower
         offset = lower
         samples = samples * scaler + offset
 
-        print_interval = max(n_samples // 10, 1)
+        print_interval = max(batch_size // 100, 1)
         import time
 
-        for n, sample in enumerate(samples):
-            if n % print_interval == 0:
-                print(f'Generating samples {n}-{min(n+print_interval, n_samples)} of {n_samples}')
+        for local_n, sample in enumerate(samples):
+            n = start + local_n
+            if local_n % print_interval == 0:
+                print(f'Generating samples {n}-{min(n+print_interval, start+batch_size)} of {n_samples}')
 
             ind = 0
             in_dict = {}
@@ -103,13 +148,18 @@ class Generator():
                 ind += dims[i]
 
             if time_samples:
-                start = time.time()
+                start_t = time.time()
 
             result = function(in_dict)
             if time_samples:
-                print(f'Generated sample {n} in {time.time() - start} seconds')
-                
+                print(f'Generated sample {n} in {time.time() - start_t} seconds')
+
             self._export_h5py(filename, {**in_dict, **result}, f'sample_{n}')
+
+        # save resume state if requested (next index to sample)
+        if save_state_file is not None:
+            next_index = start + batch_size
+            _np.savez(save_state_file, seed=int(seed), next_index=int(next_index))
 
     def _export_h5py(self, filename:str, data:dict, groupname:str):
         """Save variables from the current recorder's node graph to an HDF5 file.
