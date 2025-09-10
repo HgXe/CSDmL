@@ -12,7 +12,8 @@ class FCNN(NeuralNetwork):
                  activation:Union[Union[str, Callable], list[Union[str, Callable]]] = 'approx_relu', 
                  loss_function:Union[str, Callable] = 'mse',
                  dropout_rate:Union[float, list[float]] = 0.0,
-                 training:bool = True):
+                 training:bool = True,
+                 init_type:str = None):
         """
         Initialize a Fully Connected Neural Network (FCNN).
 
@@ -49,6 +50,32 @@ class FCNN(NeuralNetwork):
         self.output_dim = output_dim
         self.training = training
         
+        if init_type is None:
+            # Default initialization type based on activation function
+            if isinstance(activation, list):
+                # If activation is a list, set init_type based on each activation
+                init_type = []
+                for act in activation:
+                    if act in ['tanh', 'linear']:
+                        init_type.append('xavier')
+                    elif act in ['relu', 'approx_relu']:
+                        init_type.append('he')
+                    else:
+                        init_type.append('he') # Default to 'he' for other activations
+            else:
+                init_type = 'xavier' if activation in ['tanh', 'linear'] else 'he'
+        
+        if isinstance(init_type, str):
+            # If init_type is a string, use it for all layers
+            self.init_type = [init_type]*(len(hidden_dims) + 1)
+        elif isinstance(init_type, list):
+            # Ensure init_type has the same length as layers
+            if len(init_type) != len(hidden_dims) + 1:
+                raise ValueError("If init_type is a list, it must have the same length as hidden_dims + 1 (for output layer).")
+            self.init_type = init_type
+        else:
+            raise ValueError("init_type must be a string or a list of strings.")
+
         if isinstance(activation, list):
             # Ensure activation has the same length as layers
             if len(activation) != len(hidden_dims) + 1:
@@ -94,14 +121,15 @@ class FCNN(NeuralNetwork):
     def init_weights(self):
         self.weights = []
         for i in range(len(self.layers) - 1):
-            if self.activation[i] == 'tanh' or self.activation[i] == 'linear':
+            if self.init_type[i] == 'xavier':
                 # Xavier initialization for tanh
                 weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]))
-            elif self.activation[i] == 'relu' or self.activation[i] == 'approx_relu':
+            elif self.init_type[i] == 'he':
                 # He initialization for relu
                 weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]) / np.sqrt(self.layers[i]/2))
             else:
-                weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]))
+                raise ValueError(f"Invalid initialization type: {self.init_type[i]}. Supported types are 'xavier' and 'he'.")
+                # weights_i = csdl.Variable(value=np.random.randn(self.layers[i], self.layers[i+1]))
             self.weights.append(weights_i)
 
     def init_biases(self):

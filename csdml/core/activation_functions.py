@@ -169,11 +169,10 @@ def d_parametric_relu(x:VariableLike, alpha:float=0.0)->csdl.Variable:
 
 
 
-def dropout(x: VariableLike, rate: VariableLike, training: bool = True) -> csdl.Variable:
+def dropout(x:VariableLike, rate:VariableLike, training:bool=True) -> csdl.Variable:
     """Dropout regularization function.
-    
-    During training, randomly sets input units to 0 with a frequency of `rate` at each 
-    step during training time, which helps prevent overfitting. Inputs not set to 0 
+    During training, randomly sets input units to 0 with a frequency of `rate` at each
+    step during training time, which helps prevent overfitting. Inputs not set to 0
     are scaled up by 1/(1-rate) such that the sum over all inputs is unchanged.
     
     Parameters
@@ -212,7 +211,7 @@ def dropout(x: VariableLike, rate: VariableLike, training: bool = True) -> csdl.
         return x
     
     # During training, apply dropout
-    mask = csdl.bernoulli(p=rate, shape=x.shape)
+    mask = csdl.bernoulli(p=1-rate, shape=x.shape)
 
     return x * mask / (1 - rate)
 

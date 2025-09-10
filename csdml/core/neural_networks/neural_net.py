@@ -113,7 +113,8 @@ class NeuralNetwork():
         
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
                       num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
-                      trial=None, patience=None, ema=None, permute=True, prng_seed=42):
+                      trial=None, patience=None, ema=None, permute=True, prng_seed=42, 
+                      add_jitter=False, jitter_std=0.01):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -192,12 +193,14 @@ class NeuralNetwork():
             X_test, Y_test = test_data
             X_test_var = csdl.Variable(value=X_test)
             Y_test_var = csdl.Variable(value=Y_test)
+            self.set_training_mode(training=False)
             y_pred = self._forward(X_test_var)
             if self.loss_function == 'mse':
                 test_loss = csdl.sum((Y_test_var - y_pred)**2)/np.prod(Y_test_var.shape)
             elif callable(self.loss_function):
                 test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
+            self.set_training_mode(training=True)
 
         # Build optimization step
         net_params = [jnp.array(dv.value) for dv in dvs]
@@ -231,6 +234,7 @@ class NeuralNetwork():
         loss_history = []
         test_loss_history = []
         best_test_loss = np.inf
+        best_loss = np.inf
         best_params = net_params
         start = time()
         print_interval = max(1, num_epochs // 10)
@@ -250,6 +254,12 @@ class NeuralNetwork():
                 X_batch = X_device[idx]
                 Y_batch = Y_device[idx]
 
+                # add jitter to the input data if specified
+                if add_jitter:
+                    prng_key, subkey = jax.random.split(prng_key)
+                    jitter = jax.random.normal(subkey, X_batch.shape) * jitter_std
+                    X_batch += jitter
+
                 # split prng key for each batch (eg for dropout)
                 prng_key, subkey = jax.random.split(prng_key)
 
@@ -263,11 +273,17 @@ class NeuralNetwork():
 
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
-                    test_loss = jax_test_fn(*net_params)[0]
+                    test_loss = jax_test_fn(*net_params, prng_key=subkey)[0]
                     test_loss = float(test_loss[0])
                     test_loss_history.append(test_loss)
                     if test_loss < best_test_loss:
                         best_test_loss = test_loss
+                        best_params = net_params
+                        decreased = True
+                else:
+                    loss_check = float(loss[0])
+                    if loss_check < best_loss:
+                        best_loss = loss_check
                         best_params = net_params
                         decreased = True
 
@@ -319,7 +335,7 @@ class NeuralNetwork():
             plt.close()
         
         # extract values of the design variables
-        param_vals = [np.array(x) for x in net_params]
+        param_vals = [np.array(x) for x in best_params]
 
         for dv, val in zip(dvs, param_vals):
             dv.value = val
@@ -343,9 +359,8 @@ class NeuralNetwork():
         self.set_training_mode(training=False)
 
         if test_data is not None:
-            best_param_vals = [np.array(x) for x in best_params]
-            return loss_history, test_loss_history, best_param_vals
-        return loss_history, test_loss_history
+            return loss_history, test_loss_history, param_vals
+        return loss_history, param_vals
 
 def print_status(epoch, num_epochs, step, num_steps, loss_history, test_loss_history, start):
     """
