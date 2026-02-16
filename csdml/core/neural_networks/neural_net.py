@@ -111,10 +111,52 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
+    def _compute_loss(self, X: np.ndarray, Y: np.ndarray , batch_size: int, compute_grad: bool):
+        if compute_grad:
+            # per-sample Jacobians; avoids B^2-size batched Jacobian
+            X_var_shape = X.shape[1:]
+            x_dim = int(np.prod(X_var_shape))
+            X_vars = [csdl.Variable(shape=(1, *X_var_shape), value=0) for _ in range(batch_size)]
+            X_var_batch = csdl.concatenate(X_vars, axis=0)
+            Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
+
+            y_pred = self._forward(X_var_batch)
+            y_dim = int(np.prod(y_pred.shape[1:]))
+
+            # assemble [value, gradient...]
+            y_out = csdl.Variable(shape=(batch_size, y_dim, 1 + x_dim), value=0)
+            y_out = y_out.set(csdl.slice[:, :, 0], csdl.reshape(y_pred, shape=(batch_size, y_dim)))
+
+            # mode = 'reverse' if x_dim >= y_dim else 'fwd'
+            mode = 'reverse' # TODO: only rev is supported by csdl currently
+            for i in range(batch_size):
+                jac_i = csdl.derivative(y_pred[i], X_vars[i], mode=mode)  # (y_dim, x_dim)
+                y_out = y_out.set(csdl.slice[i, :, 1:], jac_i)
+
+            y_pred = y_out
+
+
+        else:
+            X_var_batch = csdl.Variable(shape=X[:batch_size].shape, value=0)
+            Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
+
+            # run the training loop
+            y_pred = self._forward(X_var_batch)
+
+        # compute the loss
+        if self.loss_function == 'mse':
+            loss = csdl.sum((Y_var_batch - y_pred)**2)/np.prod(Y_var_batch.shape)
+        elif callable(self.loss_function):
+            loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
+        else:
+            raise ValueError('Invalid loss function')
+        return loss, X_var_batch, Y_var_batch
+
+
     def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
                       num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
                       trial=None, patience=None, ema=None, permute=True, prng_seed=42, 
-                      add_jitter=False, jitter_std=0.01):
+                      add_jitter=False, jitter_std=0.01, compute_grad=False):
         """
         Train the neural network using JAX optimizers or optax optimizers
 
@@ -171,19 +213,9 @@ class NeuralNetwork():
         Y_device = jnp.array(Y)
         batch_size = X.shape[0] // num_batches
 
-        X_var_batch = csdl.Variable(shape=X[:batch_size].shape, value=0)
-        Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
-
-        # run the training loop
-        y_pred = self._forward(X_var_batch)
-
-        # compute the loss
-        if self.loss_function == 'mse':
-            loss = csdl.sum((Y_var_batch - y_pred)**2)/np.prod(Y_var_batch.shape)
-        elif callable(self.loss_function):
-            loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
-        else:
-            raise ValueError('Invalid loss function')
+        
+        loss, X_var_batch, Y_var_batch = self._compute_loss(X, Y, batch_size, compute_grad)
+        
         loss.set_as_objective()
 
         dvs = [var for var in rec_inner.design_variables.keys()]
@@ -191,14 +223,8 @@ class NeuralNetwork():
         # build test function
         if test_data is not None:
             X_test, Y_test = test_data
-            X_test_var = csdl.Variable(value=X_test)
-            Y_test_var = csdl.Variable(value=Y_test)
             self.set_training_mode(training=False)
-            y_pred = self._forward(X_test_var)
-            if self.loss_function == 'mse':
-                test_loss = csdl.sum((Y_test_var - y_pred)**2)/np.prod(Y_test_var.shape)
-            elif callable(self.loss_function):
-                test_loss = self.loss_function(self, X_test_var, Y_test_var, y_pred)
+            test_loss, X_test_var, Y_test_var = self._compute_loss(X_test, Y_test, X_test.shape[0], compute_grad)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
             self.set_training_mode(training=True)
 
