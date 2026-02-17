@@ -111,14 +111,15 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def _compute_loss(self, X: np.ndarray, Y: np.ndarray , batch_size: int, compute_grad: bool):
+    def _compute_loss(self, X: np.ndarray, Y: np.ndarray , compute_grad: bool):
         if compute_grad:
             # per-sample Jacobians; avoids B^2-size batched Jacobian
+            batch_size = X.shape[0]
             X_var_shape = X.shape[1:]
             x_dim = int(np.prod(X_var_shape))
-            X_vars = [csdl.Variable(shape=(1, *X_var_shape), value=0) for _ in range(batch_size)]
+            X_vars = [csdl.Variable(shape=(1, *X_var_shape), value=X[i:i+1]) for i in range(batch_size)]
             X_var_batch = csdl.concatenate(X_vars, axis=0)
-            Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
+            Y_var_batch = csdl.Variable(shape=Y.shape, value=Y)
 
             y_pred = self._forward(X_var_batch)
             y_dim = int(np.prod(y_pred.shape[1:]))
@@ -137,8 +138,8 @@ class NeuralNetwork():
 
 
         else:
-            X_var_batch = csdl.Variable(shape=X[:batch_size].shape, value=0)
-            Y_var_batch = csdl.Variable(shape=Y[:batch_size].shape, value=0)
+            X_var_batch = csdl.Variable(shape=X.shape, value=X)
+            Y_var_batch = csdl.Variable(shape=Y.shape, value=Y)
 
             # run the training loop
             y_pred = self._forward(X_var_batch)
@@ -213,8 +214,10 @@ class NeuralNetwork():
         Y_device = jnp.array(Y)
         batch_size = X.shape[0] // num_batches
 
+        X_batch = X[:batch_size]
+        Y_batch = Y[:batch_size]
         
-        loss, X_var_batch, Y_var_batch = self._compute_loss(X, Y, batch_size, compute_grad)
+        loss, X_var_batch, Y_var_batch = self._compute_loss(X_batch, Y_batch, compute_grad)
         
         loss.set_as_objective()
 
@@ -224,7 +227,7 @@ class NeuralNetwork():
         if test_data is not None:
             X_test, Y_test = test_data
             self.set_training_mode(training=False)
-            test_loss, X_test_var, Y_test_var = self._compute_loss(X_test, Y_test, X_test.shape[0], compute_grad)
+            test_loss, X_test_var, Y_test_var = self._compute_loss(X_test, Y_test, compute_grad)
             jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
             self.set_training_mode(training=True)
 
