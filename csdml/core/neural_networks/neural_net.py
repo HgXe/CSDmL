@@ -154,38 +154,107 @@ class NeuralNetwork():
         return loss, X_var_batch, Y_var_batch
 
 
-    def train_jax_opt(self, optimizer:Union[list, "GradientTransformation"], loss_data, 
-                      num_batches=10, num_epochs=100, test_data=None, plot=True, log_plot=True, device=None, 
-                      trial=None, patience=None, ema=None, permute=True, prng_seed=42, 
-                      add_jitter=False, jitter_std=0.01, compute_grad=False):
+    def train_jax_opt(
+        self, 
+        optimizer: Union[list, "GradientTransformation"], 
+        loss_data: tuple, 
+        num_batches: int = 10, 
+        num_epochs: int = 100, 
+        test_data: tuple = None, 
+        test_interval: int = 1,
+        plot: bool = True, 
+        log_plot: bool = True, 
+        device: 'xla_client.Device' = None, 
+        trial: 'optuna.Trial' = None, 
+        patience: int = None, 
+        ema: 'optax.Ema' = None, 
+        permute: bool = True, 
+        prng_seed: int = 42, 
+        add_jitter: bool = False, 
+        jitter_std: float = 0.01, 
+        compute_grad: bool = False):
         """
-        Train the neural network using JAX optimizers or optax optimizers
+        Train the neural network using JAX optimizers or optax optimizers.
+
+        This method trains the neural network by computing gradients with respect to
+        the network parameters and updating them using the specified optimizer. It
+        supports batched training, early stopping, exponential moving average (EMA),
+        and integration with Optuna for hyperparameter optimization.
 
         Parameters
         ----------
         optimizer : Union[list, optax.GradientTransformation]
-            JAX optimizer or optax optimizer
+            The optimizer to use for training. Can be either:
+            - An optax.GradientTransformation object (e.g., optax.adam, optax.sgd)
+            - A tuple of (opt_init, opt_update, get_params) for custom JAX optimizers
         loss_data : tuple
-            loss_data = X_train, targets
+            Training data as (X_train, Y_train) where X_train and Y_train are numpy arrays.
         num_batches : int, optional
-            Number of batches to use for training. The default is 10.
+            Number of batches to divide the training data into. The default is 10.
         num_epochs : int, optional
-            Number of epochs to train. The default is 100.
+            Number of training epochs to run. The default is 100.
         test_data : tuple, optional
-            test_data = X_test, Y_test. The default is None.
+            Validation/test data as (X_test, Y_test). If provided, test loss is
+            computed at intervals and used for early stopping. The default is None.
+        test_interval : int, optional
+            Interval (in batches) at which to evaluate the test loss. The default is 1.
         plot : bool, optional
-            Whether to plot the loss history. The default is True.
-        device : str, optional
-            Device to use for training. The default is None.
+            Whether to save a plot of the loss history to 'loss_history.png'.
+            The default is True.
+        log_plot : bool, optional
+            Whether to use log scale for the loss history plot y-axis. The default is True.
+        device : xla_client.Device, optional
+            JAX device to use for JIT compilation (e.g., 'gpu:0', 'cpu'). 
+            The default is None (uses default device).
+        trial : optuna.Trial, optional
+            Optuna trial object for hyperparameter optimization. If provided,
+            best test loss is reported to Optuna at each epoch. The default is None.
+        patience : int, optional
+            Number of test intervals to wait without improvement before early stopping.
+            Only used if test_data is provided. The default is None (no early stopping).
+        ema : optax.Ema, optional
+            Optax exponential moving average wrapper for parameter averaging.
+            If provided, an EMA version of parameters is maintained and used.
+            The default is None.
+        permute : bool, optional
+            Whether to randomly permute the training data at each epoch. 
+            The default is True.
+        prng_seed : int, optional
+            Random seed for JAX PRNG key initialization. The default is 42.
+        add_jitter : bool, optional
+            Whether to add Gaussian noise to input data during training for regularization.
+            The default is False.
+        jitter_std : float, optional
+            Standard deviation of the Gaussian noise added to inputs if add_jitter is True.
+            The default is 0.01.
+        compute_grad : bool, optional
+            Whether to compute and include per-sample Jacobians in the loss computation.
+            This is useful for computing gradients with respect to inputs. 
+            The default is False.
 
         Returns
         -------
         loss_history : list
-            List of training losses
-        test_loss_history : list
-            List of test losses
+            List of training loss values computed at each batch step.
+        test_loss_history : list (optional)
+            List of test loss values. Only returned if test_data is provided.
         best_param_vals : list
-            List of best parameter values
+            List of best parameter values found during training. Parameters are
+            ordered according to self.parameters.
+
+        Raises
+        ------
+        optuna.TrialPruned
+            If an Optuna trial is provided and should be pruned based on its criteria.
+
+        Notes
+        -----
+        - The method temporarily stops the outer recorder and creates a new inner
+          recorder to isolate the training graph.
+        - After training completes, the network is set to inference mode via
+          set_training_mode(training=False).
+        - If EMA is used, the EMA-averaged parameters are returned as best_param_vals.
+        - Early stopping (patience) compares against test loss improvements.
         """
         if trial is not None:
             import optuna
@@ -302,13 +371,14 @@ class NeuralNetwork():
 
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
-                    test_loss = jax_test_fn(*net_params, prng_key=subkey)[0]
-                    test_loss = float(test_loss[0])
-                    test_loss_history.append(test_loss)
-                    if test_loss < best_test_loss:
-                        best_test_loss = test_loss
-                        best_params = net_params
-                        decreased = True
+                    if (ibatch + num_batches*epoch) % test_interval == 0:
+                        test_loss = jax_test_fn(*net_params, prng_key=subkey)[0]
+                        test_loss = float(test_loss[0])
+                        test_loss_history.append(test_loss)
+                        if test_loss < best_test_loss:
+                            best_test_loss = test_loss
+                            best_params = net_params
+                            decreased = True
                 else:
                     loss_check = float(loss[0])
                     if loss_check < best_loss:
@@ -327,7 +397,7 @@ class NeuralNetwork():
                     wait = 0
                 else:
                     wait += 1
-                    if patience is not None and wait > patience * num_batches:
+                    if patience is not None and wait > patience * test_interval:
                         print()
                         print(f'Early stopping at epoch {epoch}')
                         break
@@ -353,10 +423,34 @@ class NeuralNetwork():
             else:
                 plot_fn = ax.plot
 
-            __=plot_fn(loss_history)
+            # Plot training loss
+            __=plot_fn(loss_history, label='train')
+            
+            # Plot test loss at intervals
             if test_data is not None:
-                __=plot_fn(test_loss_history)
+                test_steps = [i * test_interval for i in range(len(test_loss_history))]
+                __=plot_fn(test_steps, test_loss_history, label='test')
+                
+                # Mark and annotate minimum test loss
+                min_test_idx = np.argmin(test_loss_history)
+                min_test_step = test_steps[min_test_idx]
+                min_test_loss = test_loss_history[min_test_idx]
+                ax.plot(min_test_step, min_test_loss, 'r*', markersize=15)
+                ax.annotate(f'min: {min_test_loss:.4g}', 
+                           xy=(min_test_step, min_test_loss),
+                           xytext=(10, 10), textcoords='offset points',
+                           bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
+                           arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+                
                 ax.legend(['train', 'test'])
+            
+            # Mark epochs on the plot
+            steps_per_epoch = num_batches
+            for epoch in range(1, num_epochs + 1):
+                epoch_step = epoch * steps_per_epoch
+                if epoch_step < len(loss_history):
+                    ax.axvline(epoch_step, color='gray', linestyle='--', alpha=0.3, linewidth=0.8)
+            
             xlabel = ax.set_xlabel(r'${\rm step\ number}$')
             ylabel = ax.set_ylabel(r'${\rm loss}$')
             title = ax.set_title(r'${\rm training\ history}$')
