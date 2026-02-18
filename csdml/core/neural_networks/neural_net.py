@@ -338,6 +338,7 @@ class NeuralNetwork():
         print_interval = max(1, num_epochs // 10)
         np_rng = np.random.default_rng(seed=42)
         wait = 0
+        early_stopped = False
         for epoch in range(num_epochs):
             perm = np_rng.permutation(X.shape[0])
             decreased = False
@@ -392,21 +393,25 @@ class NeuralNetwork():
                     # remove jitting time
                     start = time()
 
-            if test_data is not None:
-                if decreased:
-                    wait = 0
-                else:
-                    wait += 1
-                    if patience is not None and wait > patience * test_interval:
-                        print()
-                        print(f'Early stopping at epoch {epoch}')
-                        break
+                if test_data is not None:
+                    if decreased:
+                        wait = 0
+                    else:
+                        wait += 1
+                        if patience is not None and wait > patience * test_interval:
+                            print()
+                            print(f'Early stopping at epoch {epoch}')
+                            early_stopped = True
+                            break
             
             # report the best test loss to optuna
             if trial is not None and test_data is not None:
                 trial.report(best_test_loss, epoch)
                 if trial.should_prune():
                     raise optuna.TrialPruned()
+
+            if early_stopped:
+                break
                 
         end = time()
         msg = "training time for {0} epochs with {1} batches = {2:.1f} seconds"
