@@ -111,7 +111,7 @@ class NeuralNetwork():
         self.init_parameters()
         self.set_param_values(param_vals)
         
-    def _compute_loss(self, X: np.ndarray, Y: np.ndarray , compute_grad: bool):
+    def _compute_loss(self, X: np.ndarray, Y: np.ndarray , compute_grad: bool, additional_loss_functions: list[callable] = None):
         if compute_grad:
             # per-sample Jacobians; avoids B^2-size batched Jacobian
             batch_size = X.shape[0]
@@ -151,6 +151,13 @@ class NeuralNetwork():
             loss = self.loss_function(self, X_var_batch, Y_var_batch, y_pred)
         else:
             raise ValueError('Invalid loss function')
+
+        if additional_loss_functions is not None:
+            additional_losses = []
+            for additional_loss_fn in additional_loss_functions:
+                add_loss = additional_loss_fn(self, X_var_batch, Y_var_batch, y_pred)
+                additional_losses.append(add_loss)
+            return loss, X_var_batch, Y_var_batch, additional_losses
         return loss, X_var_batch, Y_var_batch
 
 
@@ -172,7 +179,9 @@ class NeuralNetwork():
         prng_seed: int = 42, 
         add_jitter: bool = False, 
         jitter_std: float = 0.01, 
-        compute_grad: bool = False):
+        compute_grad: bool = False,
+        test_loss_functions: list[callable] = None,
+        ):
         """
         Train the neural network using JAX optimizers or optax optimizers.
 
@@ -231,6 +240,10 @@ class NeuralNetwork():
             Whether to compute and include per-sample Jacobians in the loss computation.
             This is useful for computing gradients with respect to inputs. 
             The default is False.
+        test_loss_functions : list[callable], optional
+            A list of additional loss functions to compute on the test set at each test interval.
+            Each function should take arguments (self, X_test_var, Y_test_var, y_pred) and return a scalar loss. The computed losses will be logged but not used for early stopping.
+            The default is None.
 
         Returns
         -------
@@ -296,8 +309,12 @@ class NeuralNetwork():
         if test_data is not None:
             X_test, Y_test = test_data
             self.set_training_mode(training=False)
-            test_loss, X_test_var, Y_test_var = self._compute_loss(X_test, Y_test, compute_grad)
-            jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
+            if test_loss_functions is not None:
+                test_loss, X_test_var, Y_test_var, additional_test_losses = self._compute_loss(X_test, Y_test, compute_grad, additional_loss_functions=test_loss_functions)
+                jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss]+additional_test_losses, inputs=dvs), device=device)
+            else:
+                test_loss, X_test_var, Y_test_var = self._compute_loss(X_test, Y_test, compute_grad)
+                jax_test_fn = jjit(create_jax_function(rec_inner.active_graph, outputs=[test_loss], inputs=dvs), device=device)
             self.set_training_mode(training=True)
 
         # Build optimization step
@@ -331,6 +348,7 @@ class NeuralNetwork():
         # run optimization loop
         loss_history = []
         test_loss_history = []
+        additional_loss_histories = [[] for _ in range(len(test_loss_functions))] if test_loss_functions is not None else None
         best_test_loss = np.inf
         best_loss = np.inf
         best_params = net_params
@@ -373,9 +391,16 @@ class NeuralNetwork():
                 loss_history.append(float(loss[0]))
                 if test_data is not None:
                     if (ibatch + num_batches*epoch) % test_interval == 0:
-                        test_loss = jax_test_fn(*net_params, prng_key=subkey)[0]
+                        test_loss = jax_test_fn(*net_params, prng_key=subkey)
+                        if test_loss_functions is not None:
+                            additional_losses = test_loss[1:]
+                            test_loss = test_loss[0]
+                        
                         test_loss = float(test_loss[0])
                         test_loss_history.append(test_loss)
+                        if test_loss_functions is not None:
+                            for i, loss in enumerate(additional_losses):
+                                additional_loss_histories[i].append(float(loss[0]))
                         if test_loss < best_test_loss:
                             best_test_loss = test_loss
                             best_params = net_params
@@ -431,9 +456,17 @@ class NeuralNetwork():
             # Plot training loss
             __=plot_fn(loss_history, label='train')
             
+
             # Plot test loss at intervals
             if test_data is not None:
                 test_steps = [i * test_interval for i in range(len(test_loss_history))]
+
+                # Plot additional test losses if they exist at intervals
+                if additional_loss_histories is not None:
+                    for i, hist in enumerate(additional_loss_histories):
+                        __=plot_fn(test_steps, hist, label=f'test_{i}')
+
+                # plot main test loss (same as training loss)
                 __=plot_fn(test_steps, test_loss_history, label='test')
                 
                 # Mark and annotate minimum test loss
@@ -446,8 +479,8 @@ class NeuralNetwork():
                            xytext=(10, 10), textcoords='offset points',
                            bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
                            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
-                
-                ax.legend(['train', 'test'])
+            
+                ax.legend()
             
             # Mark epochs on the plot
             steps_per_epoch = num_batches
@@ -487,6 +520,8 @@ class NeuralNetwork():
         self.set_training_mode(training=False)
 
         if test_data is not None:
+            if test_loss_functions is not None:
+                return loss_history, test_loss_history, additional_loss_histories, param_vals
             return loss_history, test_loss_history, param_vals
         return loss_history, param_vals
 
