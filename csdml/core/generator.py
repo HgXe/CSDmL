@@ -51,9 +51,64 @@ class Generator():
 
     def _build_generator_function(self, backend='jax', device='cpu'):
         if backend == 'jax':
-            interface = csdl.jax.create_jax_interface(inputs=list(self.inputs.keys()), outputs=self.outputs, graph=self.recorder.active_graph, device=device)
+            from csdl_alpha.src.operations.operation_subclasses import RandomOperation
+
+            has_random_operations = any(
+                isinstance(node, RandomOperation)
+                for node in self.recorder.active_graph.node_table
+            )
+            if has_random_operations:
+                # CSDL's standard interface currently drops the PRNG key during
+                # its optional cost-analysis trace. Build the same jitted graph
+                # directly for generators that contain random operations.
+                import jax
+                import numpy as np
+                from csdl_alpha.backends.jax.graph_to_jax import create_jax_function
+
+                input_variables = list(self.inputs.keys())
+                output_variables = list(self.outputs)
+                jax.config.update("jax_enable_x64", True)
+                if device == 'gpu':
+                    try:
+                        jax_device = jax.devices('gpu')[0]
+                    except Exception as error:
+                        print(f"GPU not found: '{error}', falling back to CPU")
+                        jax_device = jax.devices('cpu')[0]
+                elif device == 'cpu':
+                    jax_device = jax.devices('cpu')[0]
+                else:
+                    raise ValueError(f'Invalid device {device}')
+
+                jax_function = create_jax_function(
+                    self.recorder.active_graph,
+                    output_variables,
+                    input_variables,
+                )
+                jax_function = jax.jit(jax_function, device=jax_device)
+
+                def interface(input_dict, prng_key=None):
+                    values = [jax.numpy.asarray(input_dict[var]) for var in input_variables]
+                    outputs = jax_function(*values, prng_key=prng_key)
+                    return {
+                        variable: np.asarray(value)
+                        for variable, value in zip(output_variables, outputs)
+                    }
+            else:
+                interface = csdl.jax.create_jax_interface(inputs=list(self.inputs.keys()), outputs=self.outputs, graph=self.recorder.active_graph, device=device)
         elif backend == 'inline':
-            generator_graph, _, _ = self.recorder.active_graph.extract_subgraph(self.inputs.keys(), self.outputs)
+            from csdl_alpha.src.operations.operation_subclasses import RandomOperation
+
+            # A source-to-target extraction treats a zero-input random operation
+            # as a hanging constant and therefore freezes its first inline value.
+            # Execute the active graph when randomness is present so those
+            # operations are evaluated afresh for every sample.
+            if any(
+                isinstance(node, RandomOperation)
+                for node in self.recorder.active_graph.node_table
+            ):
+                generator_graph = self.recorder.active_graph
+            else:
+                generator_graph, _, _ = self.recorder.active_graph.extract_subgraph(self.inputs.keys(), self.outputs)
             def interface(input_dict):
                 for key, value in input_dict.items():
                     key.value = value
@@ -67,7 +122,8 @@ class Generator():
     def generate(self, filename:str='data', samples_per_dim:int=10, n_samples:int=None,
                  time_samples:bool=False, backend='jax', device='cpu',
                  batch_size:int=None, start:int=0, seed:int=0,
-                 resume_state_file:str=None, save_state_file:str=None):
+                 resume_state_file:str=None, save_state_file:str=None,
+                 random_seed:int=None, save_inputs:bool=True):
         """
         Generate samples using LatinHypercube. Supports batching/resuming.
 
@@ -75,17 +131,29 @@ class Generator():
         - batch_size: number of samples to produce in this call. If None, produce all remaining.
         - start: index to start sampling from (0-based). Ignored if resume_state_file provided.
         - seed: RNG seed for reproducible sequences.
-        - resume_state_file: if provided and exists, loads {'seed', 'next_index'} and overrides start/seed.
-        - save_state_file: if provided, saves {'seed', 'next_index'} after this batch so you can resume later.
+        - random_seed: seed for graph random operations. Each global sample index
+          receives its own reproducible key. Defaults to ``seed``.
+        - save_inputs: whether to include sampled inputs in each HDF5 group.
+        - resume_state_file: if provided and exists, restores the sampling seed,
+          random seed, and next sample index.
+        - save_state_file: if provided, saves those values after this batch so
+          generation can resume reproducibly.
         """
         import os
         import numpy as _np
+
+        use_saved_random_seed = random_seed is None
 
         # resume state if requested
         if resume_state_file is not None and os.path.exists(resume_state_file):
             st = _np.load(resume_state_file)
             seed = int(st['seed'])
             start = int(st['next_index'])
+            if use_saved_random_seed and 'random_seed' in st:
+                random_seed = int(st['random_seed'])
+
+        if random_seed is None:
+            random_seed = seed
 
         function = self._build_generator_function(backend=backend, device=device)
         # in future, use the estimated input probability distribution to sample the input variables
@@ -150,16 +218,36 @@ class Generator():
             if time_samples:
                 start_t = time.time()
 
-            result = function(in_dict)
+            if backend == 'jax':
+                from jax import random as _jax_random
+                sample_key = _jax_random.fold_in(
+                    _jax_random.PRNGKey(random_seed), n
+                )
+                result = function(in_dict, prng_key=sample_key)
+            else:
+                # RandomOperation.compute_inline uses NumPy's global RNG. Seed it
+                # from the global sample index so resumed batches reproduce the
+                # same random graph values as uninterrupted generation.
+                sample_seed = _np.random.SeedSequence(
+                    [int(random_seed), int(n)]
+                ).generate_state(1)[0]
+                _np.random.seed(sample_seed)
+                result = function(in_dict)
             if time_samples:
                 print(f'Generated sample {n} in {time.time() - start_t} seconds')
 
-            self._export_h5py(filename, {**in_dict, **result}, f'sample_{n}')
+            saved_data = {**in_dict, **result} if save_inputs else result
+            self._export_h5py(filename, saved_data, f'sample_{n}')
 
         # save resume state if requested (next index to sample)
         if save_state_file is not None:
             next_index = start + batch_size
-            _np.savez(save_state_file, seed=int(seed), next_index=int(next_index))
+            _np.savez(
+                save_state_file,
+                seed=int(seed),
+                random_seed=int(random_seed),
+                next_index=int(next_index),
+            )
 
     def _export_h5py(self, filename:str, data:dict, groupname:str):
         """Save variables from the current recorder's node graph to an HDF5 file.
